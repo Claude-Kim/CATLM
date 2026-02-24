@@ -70,6 +70,9 @@ ATTACHMENT_GAIN = 0.015            # cumulative integration strength
 SIT_PERSIST_K = 3
 SIT_EPS = 0.35  # for z_{t+1} - z_t magnitude threshold (proxy)
 
+# (NEW) optional: only count SIT when near/inside collapse regime
+SIT_REQUIRE_COLLAPSE_REGIME = True  # set False if you want "any" structural transition
+
 # game-stability knobs (v1.1)
 MODE_EXIT_HYSTERESIS = 0.08          # SURVIVAL→NORMAL hysteresis band
 CRISIS_STREAK_FOR_CAPACITY = 2       # min consecutive crisis ticks before capacity decays
@@ -500,6 +503,9 @@ class CATLMAgent:
         self.mode: Mode = Mode.NORMAL
         self.mode_persist = 0
         self.sit_events: List[Tuple[int, Mode, Mode]] = []  # (t, old, new)
+        # (NEW) last-step SIT flag + reason for logging/replay
+        self.sit_flag: int = 0
+        self.sit_reason: str = ""
 
         # simple latent config proxy z_t (vector in R^2) to detect transition magnitude
         self.z = (0.5, 0.5)  # (explore_drive, care_drive)
@@ -671,6 +677,10 @@ class CATLMAgent:
         """Execute one hour-tick. Returns a rich report dict."""
         self.t += 1
 
+        # reset per-tick SIT signal
+        self.sit_flag = 0
+        self.sit_reason = ""
+
         # 1. natural drift
         self.state.values[State.HUNGER] += 6
         self.state.values[State.BOREDOM] += 5
@@ -759,8 +769,27 @@ class CATLMAgent:
 
         # 13. SIT detection
         dz = ((z_new[0] - self.z[0]) ** 2 + (z_new[1] - self.z[1]) ** 2) ** 0.5
-        if old_mode != self.mode and dz > SIT_EPS and self.mode_persist >= SIT_PERSIST_K:
+
+        in_collapse = (Ct >= theta)
+
+        sit_ok = (
+            (old_mode != self.mode)
+            and (dz > SIT_EPS)
+            and (self.mode_persist >= SIT_PERSIST_K)
+        )
+
+        if SIT_REQUIRE_COLLAPSE_REGIME:
+            sit_ok = sit_ok and in_collapse
+
+        if sit_ok:
             self.sit_events.append((self.t, old_mode, self.mode))
+            self.sit_flag = 1
+            self.sit_reason = (
+                f"mode:{old_mode.value}->{self.mode.value}, "
+                f"dz={dz:.3f}>(eps={SIT_EPS}), "
+                f"persist={self.mode_persist}>=(k={SIT_PERSIST_K}), "
+                f"Ct={Ct:.3f},theta={theta:.3f}"
+            )
 
         self.z = z_new
 
