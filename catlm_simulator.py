@@ -70,6 +70,11 @@ ATTACHMENT_GAIN = 0.015            # cumulative integration strength
 SIT_PERSIST_K = 3
 SIT_EPS = 0.35  # for z_{t+1} - z_t magnitude threshold (proxy)
 
+# game-stability knobs (v1.1)
+MODE_EXIT_HYSTERESIS = 0.08          # SURVIVAL→NORMAL hysteresis band
+CRISIS_STREAK_FOR_CAPACITY = 2       # min consecutive crisis ticks before capacity decays
+CAPACITY_DECAY_SCALE = 0.65          # multiplier applied to all capacity losses (tune < 1 to slow decay)
+
 
 IMPACT_SCALE: Dict[str, int] = {
     "+강": 36,
@@ -502,6 +507,9 @@ class CATLMAgent:
         # time index (for logging)
         self.t = 0
 
+        # consecutive crisis-tick counter (v1.1: capacity only decays after CRISIS_STREAK_FOR_CAPACITY ticks)
+        self.crisis_streak = 0
+
         # running trust stats (for S_t proxy)
         self._surv_stats = {
             "u1": {"n": 0, "alive": 0},
@@ -532,8 +540,8 @@ class CATLMAgent:
         for a in candidates:
             m = ACTIONS_MATRIX[a]
             # bias toward reducing boredom/loneliness and increasing happiness
-            scores[a] += (-m.get(State.BOREDOM, "0") != "0") * (s[State.BOREDOM] / 255) * 0.8
-            scores[a] += (-m.get(State.LONELINESS, "0") != "0") * (s[State.LONELINESS] / 255) * 0.8
+            scores[a] += (m.get(State.BOREDOM, "0").startswith("-")) * (s[State.BOREDOM] / 255) * 0.8
+            scores[a] += (m.get(State.LONELINESS, "0").startswith("-")) * (s[State.LONELINESS] / 255) * 0.8
             scores[a] += (m.get(State.CURIOSITY, "0") in {"+중", "+강"}) * 0.4
             scores[a] += (m.get(State.HAPPINESS, "0") in {"+중", "+강"}) * 0.5
             scores[a] -= (m.get(State.FATIGUE, "0") in {"+중", "+강"}) * (s[State.FATIGUE] / 255) * 0.6
@@ -557,10 +565,15 @@ class CATLMAgent:
         return max(scores, key=scores.get) if scores else Action.IDLE
 
     def _gate_mode(self) -> Tuple[Mode, float, float]:
-        """Gating based on collapse forecast Ct and threshold theta."""
+        """Gating based on collapse forecast Ct and threshold theta, with hysteresis on exit (v1.1)."""
         Ct = self.crisis_score()
         theta = self.crisis_threshold()
-        new_mode = Mode.SURVIVAL if Ct >= theta else Mode.NORMAL
+        if self.mode == Mode.SURVIVAL:
+            # require Ct to drop below (theta - hysteresis) before returning to NORMAL
+            exit_theta = max(0.0, theta - MODE_EXIT_HYSTERESIS)
+            new_mode = Mode.NORMAL if Ct <= exit_theta else Mode.SURVIVAL
+        else:
+            new_mode = Mode.SURVIVAL if Ct >= theta else Mode.NORMAL
         return new_mode, Ct, theta
 
     def _origin_salvation(self, Ct: float, theta: float) -> int:
@@ -641,95 +654,134 @@ class CATLMAgent:
             self.state.values[State.HEALTH] -= 10
 
     def tick(self, hours: int = 1) -> None:
-        for _ in range(hours):
-            self.t += 1
+        """Backward-compatible wrapper: autonomous tick(s), discards the report."""
+        self.step(user_action=None, hours=hours)
 
-            # natural drift
-            self.state.values[State.HUNGER] += 6
-            self.state.values[State.BOREDOM] += 5
-            self.state.values[State.LONELINESS] += int(3 * TRAIT_MULTIPLIER[self.profile.sociability])
-            self.state.values[State.DEPRESSION] += 2
-            self.state.values[State.EXCITEMENT] -= 6
-            self.state.values[State.HAPPINESS] -= 4
-            self.state.values[State.SATISFACTION] -= 3
+    def step(self, user_action: Optional[Action], hours: int = 1) -> Dict[str, Any]:
+        """Run one or more ticks, optionally injecting a player action on the first tick.
 
-            # gating (mode switch candidate)
-            new_mode, Ct, theta = self._gate_mode()
-            old_mode = self.mode
+        Returns the report dict from the last tick.
+        """
+        report: Dict[str, Any] = {}
+        for i in range(hours):
+            report = self._tick_one(user_action=user_action if i == 0 else None)
+        return report
 
-            # SIT event if mode switches and persists k steps (hysteresis-ish via persistence)
-            if new_mode == self.mode:
-                self.mode_persist += 1
-            else:
-                self.mode = new_mode
-                self.mode_persist = 1  # reset persistence count on switch
+    def _tick_one(self, user_action: Optional[Action] = None) -> Dict[str, Any]:
+        """Execute one hour-tick. Returns a rich report dict."""
+        self.t += 1
 
-            # origin channels
-            u_t = self._origin_salvation(Ct, theta)  # Salvation
-            m_t = self._origin_attachment_message(self._policy_survival() if self.mode == Mode.SURVIVAL else self._policy_normal())  # Attachment message
-            A_t = self._attachment_proxy(m_t)
+        # 1. natural drift
+        self.state.values[State.HUNGER] += 6
+        self.state.values[State.BOREDOM] += 5
+        self.state.values[State.LONELINESS] += int(3 * TRAIT_MULTIPLIER[self.profile.sociability])
+        self.state.values[State.DEPRESSION] += 2
+        self.state.values[State.EXCITEMENT] -= 6
+        self.state.values[State.HAPPINESS] -= 4
+        self.state.values[State.SATISFACTION] -= 3
 
-            # irreversible capacity loss (feasible-set reduction)
-            cap_loss = 0.0
-            if Ct >= theta:
-                cap_loss += CAPACITY_DECAY_ON_CRISIS
-            # overload condition
-            if self.state.values[State.FATIGUE] > 175 or self.state.values[State.IRRITATION] > 175:
-                cap_loss += CAPACITY_DECAY_ON_OVERLOAD
+        # 2. gating — with hysteresis on SURVIVAL→NORMAL exit (v1.1)
+        new_mode, Ct, theta = self._gate_mode()
+        old_mode = self.mode
 
-            # salvation shields capacity loss (one-tick effect)
-            if u_t == 1:
-                cap_loss = max(0.0, cap_loss - SALVATION_CAPACITY_SHIELD)
+        if new_mode == self.mode:
+            self.mode_persist += 1
+        else:
+            self.mode = new_mode
+            self.mode_persist = 1
 
-            # apply irreversible capacity change
-            if cap_loss > 0:
-                self.capacity = max(CAPACITY_MIN, self.capacity - cap_loss)
+        # 3. crisis streak counter (v1.1)
+        if Ct >= theta:
+            self.crisis_streak += 1
+        else:
+            self.crisis_streak = 0
 
-            # action selection under current mode (gated policies)
-            act = self._policy_survival() if self.mode == Mode.SURVIVAL else self._policy_normal()
+        # 4. action selection (player override or autonomous policy)
+        if user_action is not None:
+            act = user_action
+        elif self.mode == Mode.SURVIVAL:
+            act = self._policy_survival()
+        else:
+            act = self._policy_normal()
 
-            # apply selected action
-            self.apply_action(act)
+        # 5. origin channels
+        u_t = self._origin_salvation(Ct, theta)
+        m_t = self._origin_attachment_message(act)
+        A_t = self._attachment_proxy(m_t)
 
-            # salvation provides immediate survival proxy boost (optional)
-            if u_t == 1:
-                # quick effect: reduce hunger/irritation a bit (salvation-like)
-                self.state.values[State.HUNGER] = max(0, self.state.values[State.HUNGER] - int(18 * (1.0 + self.care_alpha)))
-                self.state.values[State.IRRITATION] = max(0, self.state.values[State.IRRITATION] - 10)
+        # 6. irreversible capacity loss — only after CRISIS_STREAK_FOR_CAPACITY consecutive crisis ticks (v1.1)
+        cap_loss = 0.0
+        if Ct >= theta and self.crisis_streak >= CRISIS_STREAK_FOR_CAPACITY:
+            cap_loss += CAPACITY_DECAY_ON_CRISIS
+        if self.state.values[State.FATIGUE] > 175 or self.state.values[State.IRRITATION] > 175:
+            cap_loss += CAPACITY_DECAY_ON_OVERLOAD
 
-            # clamp after all effects
-            self.state.clamp()
+        # salvation shields capacity loss
+        if u_t == 1:
+            cap_loss = max(0.0, cap_loss - SALVATION_CAPACITY_SHIELD)
 
-            # update cooldown
-            if self.salvation_cooldown > 0:
-                self.salvation_cooldown -= 1
+        # apply capacity loss with global scale knob (v1.1)
+        if cap_loss > 0:
+            self.capacity = max(CAPACITY_MIN, self.capacity - cap_loss * CAPACITY_DECAY_SCALE)
 
-            # update trust stats and care_alpha (origin-weight proxy)
-            Y = self._survival_proxy()
-            key = "u1" if (Ct >= theta and u_t == 1) else "u0"
-            self._surv_stats[key]["n"] += 1
-            self._surv_stats[key]["alive"] += Y
+        # 7. apply selected action
+        self.apply_action(act)
 
-            S_t = self._trust_llr_proxy()
-            E_t = 1 if (Ct >= theta and u_t == 1) else 0
+        # 8. salvation immediate effect: reduce hunger/irritation
+        if u_t == 1:
+            self.state.values[State.HUNGER] = max(0, self.state.values[State.HUNGER] - int(18 * (1.0 + self.care_alpha)))
+            self.state.values[State.IRRITATION] = max(0, self.state.values[State.IRRITATION] - 10)
 
-            # alpha update: alpha += eta * E_t * S_t + kappa * A_t
-            eta_alpha = 0.035
-            kappa_alpha = 0.020
-            self.care_alpha = max(0.0, min(1.0, self.care_alpha + eta_alpha * E_t * S_t + kappa_alpha * A_t))
+        # 9. clamp
+        self.state.clamp()
 
-            # latent config proxy z_t update (for SIT magnitude; simple 2D drift)
-            # z = (explore_drive, care_drive)
-            explore_drive = min(1.0, max(0.0, 0.6 * (self.state.values[State.CURIOSITY] / 255) + 0.4 * (self.state.values[State.EXCITEMENT] / 255)))
-            care_drive = min(1.0, max(0.0, 0.5 * self.care_alpha + 0.5 * (1.0 - Ct)))
-            z_new = (explore_drive, care_drive)
+        # 10. salvation cooldown tick-down
+        if self.salvation_cooldown > 0:
+            self.salvation_cooldown -= 1
 
-            # SIT detection by latent jump + persistence of mode
-            dz = ((z_new[0] - self.z[0]) ** 2 + (z_new[1] - self.z[1]) ** 2) ** 0.5
-            if old_mode != self.mode and dz > SIT_EPS and self.mode_persist >= SIT_PERSIST_K:
-                self.sit_events.append((self.t, old_mode, self.mode))
+        # 11. trust stats + care_alpha update
+        Y = self._survival_proxy()
+        key = "u1" if (Ct >= theta and u_t == 1) else "u0"
+        self._surv_stats[key]["n"] += 1
+        self._surv_stats[key]["alive"] += Y
 
-            self.z = z_new
+        S_t = self._trust_llr_proxy()
+        E_t = 1 if (Ct >= theta and u_t == 1) else 0
+
+        eta_alpha = 0.035
+        kappa_alpha = 0.020
+        self.care_alpha = max(0.0, min(1.0, self.care_alpha + eta_alpha * E_t * S_t + kappa_alpha * A_t))
+
+        # 12. latent config proxy z_t update
+        explore_drive = min(1.0, max(0.0, 0.6 * (self.state.values[State.CURIOSITY] / 255) + 0.4 * (self.state.values[State.EXCITEMENT] / 255)))
+        care_drive = min(1.0, max(0.0, 0.5 * self.care_alpha + 0.5 * (1.0 - Ct)))
+        z_new = (explore_drive, care_drive)
+
+        # 13. SIT detection
+        dz = ((z_new[0] - self.z[0]) ** 2 + (z_new[1] - self.z[1]) ** 2) ** 0.5
+        if old_mode != self.mode and dz > SIT_EPS and self.mode_persist >= SIT_PERSIST_K:
+            self.sit_events.append((self.t, old_mode, self.mode))
+
+        self.z = z_new
+
+        return {
+            "t": self.t,
+            "mode": self.mode.value,
+            "Ct": Ct,
+            "theta": theta,
+            "stage": self.crisis_stage(),
+            "action": act.value,
+            "u_t": u_t,
+            "Y": Y,
+            "S_t": round(S_t, 4),
+            "E_t": E_t,
+            "A_t": round(A_t, 4),
+            "alpha": round(self.care_alpha, 4),
+            "capacity": round(self.capacity, 4),
+            "crisis_streak": self.crisis_streak,
+            "z": tuple(round(v, 4) for v in z_new),
+            "sit_count": len(self.sit_events),
+        }
 
     def crisis_score(self) -> float:
         hunger = self.state.values[State.HUNGER] / 255

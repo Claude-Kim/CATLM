@@ -37,35 +37,74 @@ DialogueBank   512-토큰 대사 뱅크 — JSON 로드, 인덱스 3종 (_by_ton
 |------|------|--------|
 | `IMPACT_SCALE` | 레이블 → 정수 변환 (`+강`=36 … `-강`=-36) | 고정 |
 | `TRAIT_MULTIPLIER` | 특성값(1~5) → 배수(0.6~1.6) | 고정 |
-| `CAPACITY_DECAY_ON_CRISIS` | 위기 틱당 비가역 역량 손실 | 0.06 |
+| `CAPACITY_DECAY_ON_CRISIS` | 위기 틱당 비가역 역량 손실 (× SCALE 적용 후 실효값) | 0.06 |
 | `CAPACITY_DECAY_ON_OVERLOAD` | 피로/짜증 과부하 시 추가 손실 | 0.03 |
+| `CAPACITY_DECAY_SCALE` | capacity 손실 전체 스케일 (게임 밸런스 조정용) | 0.65 |
 | `SALVATION_COOLDOWN_HOURS` | u_t 쿨다운 | 6 |
 | `SALVATION_CAPACITY_SHIELD` | u_t=1 시 capacity 손실 차감 | 0.08 |
 | `ATTACHMENT_GAIN` | A_t 통합 강도 기본값 | 0.015 |
 | `SIT_PERSIST_K` | SIT 감지 최소 지속 틱 수 | 3 |
 | `SIT_EPS` | SIT 감지 잠재 벡터 변화 임계 | 0.35 |
+| `MODE_EXIT_HYSTERESIS` | SURVIVAL 탈출 히스테리시스 마진 | 0.08 |
+| `CRISIS_STREAK_FOR_CAPACITY` | capacity 손실 발동에 필요한 연속 위기 틱 수 | 2 |
 | `_BASE_TONE_PRIOR` | 8개 톤 사전 분포 (모두 1.0) | 고정 |
 
-### tick() 실행 순서 (1 틱 = 1 시간)
+### 스텝 API (v1.1)
+
+```
+tick(hours)                  ← 레거시 호환 API, step()으로 라우팅
+step(user_action, hours)     ← 게임 연동 공개 API, 리포트 반환
+_tick_one(user_action)       ← 내부 1시간 프레임, 상세 리포트 반환
+```
+
+**`step()` 반환 리포트 구조:**
+```python
+{
+  "t": int,
+  "action": str,                   # 실제 실행된 액션 이름
+  "action_source": "player"|"auto",
+  "deltas": {state: int, ...},     # 0이 아닌 상태 변화만 포함
+  "crisis": {"Ct", "theta", "stage", "streak"},
+  "mode": "normal"|"survival",
+  "capacity": {"before", "after", "loss"},
+  "origin": {"u_t", "m_t", "A_t", "S_t", "Y"},
+  "alpha": {"before", "after", "d_salvation", "d_attachment"},
+  "sit_count": int,
+}
+```
+
+### _tick_one() 실행 순서 (1 틱 = 1 시간)
 
 ```
 1. t++
 2. 자연 drift (배고픔+6, 심심함+5, 외로움+3×사교성배수, ...)
-3. _gate_mode() → Ct vs θ → NORMAL/SURVIVAL 전환
-4. _origin_salvation() → u_t (확률적, 쿨다운 제어)
-5. _origin_attachment_message() → m_t → A_t
-6. capacity 감소 (위기/과부하 조건, u_t=1이면 shield 적용)
-7. 정책 선택: SURVIVAL → _policy_survival() / NORMAL → _policy_normal()
-8. apply_action()
-9. u_t=1이면 배고픔/짜증 즉각 경감
-10. state.clamp()
-11. salvation_cooldown 감소
-12. Y_t = _survival_proxy() → _surv_stats 업데이트
-13. S_t = _trust_llr_proxy() (LLR, add-1 스무딩)
-14. care_alpha += η·E_t·S_t + κ·A_t  (η=0.035, κ=0.020)
-15. z_t = (explore_drive, care_drive) 갱신
-16. SIT 감지: 모드 전환 + |Δz| > ε + persist ≥ k → sit_events 기록
+3. _gate_mode() → Ct vs θ → NORMAL/SURVIVAL 전환 (히스테리시스 적용)
+4. crisis_streak 갱신 (위기 연속 틱 카운터)
+5. 액션 결정: user_action 있으면 채택, 없으면 모드별 정책 자동 선택
+6. _origin_salvation() → u_t (확률적, 쿨다운 제어)
+7. _origin_attachment_message(act) → m_t → A_t  ← 실제 액션 기반
+8. apply_action(act)
+9. capacity 감소 (crisis_streak ≥ 2 + 과부하 조건) × CAPACITY_DECAY_SCALE, u_t=1이면 shield 적용
+10. u_t=1이면 배고픔/짜증 즉각 경감
+11. state.clamp()
+12. salvation_cooldown 감소
+13. Y_t = _survival_proxy() → _surv_stats 업데이트
+14. S_t = _trust_llr_proxy() (LLR, add-1 스무딩)
+15. care_alpha += η·E_t·S_t + κ·A_t  (η=0.035, κ=0.020)
+16. z_t = (explore_drive, care_drive) 갱신
+17. SIT 감지: 모드 전환 + |Δz| > ε + persist ≥ k → sit_events 기록
+18. 리포트 반환
 ```
+
+**v1 대비 v1.1 변경점:**
+
+| 항목 | v1 | v1.1 |
+|-----|-----|------|
+| SURVIVAL 탈출 조건 | `Ct < θ` | `Ct ≤ θ - 0.08` (히스테리시스) |
+| capacity 손실 발동 | 위기 틱마다 즉시 | 연속 2틱 이상 위기 시 발동 |
+| capacity 손실 크기 | 기본값 그대로 | × 0.65 스케일 적용 |
+| m_t 연산 기준 | 정책 예측 액션 | 실제 실행 액션 |
+| 공개 API | `tick()` | `step(user_action)` 추가 |
 
 ### 위기 게이지 Ct 계산식
 
@@ -184,15 +223,19 @@ dialogue_bank 없음 → 인라인 word_bank fallback (레거시)
 - `dialogue_bank`가 없으면 자동으로 레거시 인라인 word_bank로 fallback
 
 ### 배치 리플레이 확장 시
-- `tick()`을 이벤트 로그 기반으로 교체: `apply_action(action)` 직접 호출 후 `tick(hours=n)` 패턴 유지
+- `step(user_action=action)` 직접 호출로 이벤트 로그 기반 리플레이 구현
+- `tick(hours=n)`은 레거시 호환 유지 — 내부적으로 `step(user_action=None, hours=n)` 위임
 
 ## 주의 사항
 
-- `apply_action()`은 `care_alpha`를 **갱신하지 않는다** — 갱신은 `tick()` 내에서만 이루어진다
+- `apply_action()`은 `care_alpha`를 **갱신하지 않는다** — 갱신은 `_tick_one()` 내에서만 이루어진다
 - `_update_care_alpha()`는 현재 미사용 상태 (레거시, tick() 통합 이전 구현)
 - `capacity`는 단방향 감소 — 회복 로직은 현재 미구현 (BM 아이템 연동 예정)
+- `capacity` 손실은 `crisis_streak >= CRISIS_STREAK_FOR_CAPACITY` 조건 충족 후에만 발동 — 단발 위기 틱은 손실 없음
+- `_gate_mode()`는 히스테리시스 적용 — SURVIVAL 진입과 탈출 임계가 다름 (`θ` vs `θ - 0.08`)
 - `sit_events`는 `(t, old_mode, new_mode)` 튜플 리스트 — SIT 조건 충족 시에만 기록됨
 - `_trust_llr_proxy()`는 add-1 스무딩 적용 — 초기 틱에서 LLR이 0에 가까운 것이 정상
 - `import math` / `import json`은 파일 상단에 위치
 - `DialogueBank._by_tone` 등 인덱스는 언더스코어로 시작하지만 `sample_dialogue()`에서 직접 접근함 — 공개 API 아님
 - `_tone_from_signals()`와 `_pick_tone()`은 로직이 다름: 전자는 softmax 확률 분포로 샘플링, 후자는 if-else 하드 결정
+- `tick()`은 레거시 API — 신규 코드에서는 `step(user_action)`을 사용할 것
