@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-**Cat Adaptive Tiny Language Model (CATLM)**은 모바일 게임 *SNAX Cats*의 온디바이스 경량 AI 캐릭터 적응 시스템이다.
+**Cat Adaptive Tiny Language Model**은 모바일 게임 *SNAX Cats*의 온디바이스 경량 AI 캐릭터 적응 시스템이다.
 이론적 기반: *Structural Inference Transitions Under Irreversible Survival Constraints* (SIT 논문, arXiv 공개 예정).
 
 핵심 파일:
@@ -22,10 +22,13 @@ python3 catlm_simulator.py
 ### 데이터 모델
 
 ```
-CatProfile   고정 특성값 — activity / sociability / appetite / cowardice (각 1~5)
-CatState     가변 상태값 — 16종, 범위 0~255, clamp() 필수
-CATLMAgent   에이전트 — 위 두 모델 + 시뮬레이션 루프
-Mode         NORMAL | SURVIVAL
+CatProfile     고정 특성값 — activity / sociability / appetite / cowardice (각 1~5)
+CatState       가변 상태값 — 16종, 범위 0~255, clamp() 필수
+CATLMAgent     에이전트 — 위 두 모델 + 시뮬레이션 루프
+Mode           NORMAL | SURVIVAL
+DialogueToken  단어 토큰 — id / text / category / tones / intensity / tags
+EmoticonRule   이모티콘 규칙 — emoji / tone_weights
+DialogueBank   512-토큰 대사 뱅크 — JSON 로드, 인덱스 3종 (_by_tone / _by_category / _by_tag)
 ```
 
 ### 핵심 상수 (수정 시 주의)
@@ -41,6 +44,7 @@ Mode         NORMAL | SURVIVAL
 | `ATTACHMENT_GAIN` | A_t 통합 강도 기본값 | 0.015 |
 | `SIT_PERSIST_K` | SIT 감지 최소 지속 틱 수 | 3 |
 | `SIT_EPS` | SIT 감지 잠재 벡터 변화 임계 | 0.35 |
+| `_BASE_TONE_PRIOR` | 8개 톤 사전 분포 (모두 1.0) | 고정 |
 
 ### tick() 실행 순서 (1 틱 = 1 시간)
 
@@ -86,6 +90,63 @@ capacity < 0.40 : GIFT 추가 불가
 capacity < 0.25 : FEED / SNACK / PET / GROOM / IDLE / PLAY만 허용
 ```
 
+### 대사 생성 시스템 (Dialogue Bank)
+
+#### 파일 구조 (JSON)
+
+```json
+{
+  "tokens": [
+    {
+      "id": "tok_001",
+      "text": "배고파",
+      "category": "요구투정어",
+      "tone": ["불평", "투정"],
+      "intensity": "중",
+      "tags": ["배고픔", "먹이"]
+    }
+  ],
+  "emoticons": [
+    {
+      "emoji": "😺",
+      "tone_weights": {"행복": 1.0, "회복": 0.3}
+    }
+  ]
+}
+```
+
+#### dialogue() 라우팅
+
+```
+dialogue_bank 있음 → sample_dialogue(self)   ← 512-토큰 경로
+dialogue_bank 없음 → 인라인 word_bank fallback (레거시)
+```
+
+#### sample_dialogue() 처리 흐름
+
+```
+1. _tone_from_signals()   → 상태값 + 특성 + Ct + care_alpha → 톤 확률 분포 → softmax 샘플링
+2. _derive_tags_from_agent() → 상태 임계 초과 + 특성 + care_alpha 극값 → 태그 리스트 (최대 6개)
+3. tone_pool 필터링       → bank._by_tone[tone] 인덱스 추출
+4. 가중치 계산            → intensity × 위기 여부 + 태그 overlap × 0.35 + 카테고리 바이어스 + care_alpha 관계 태그 보정
+5. _weighted_choice()     → 1번째 토큰 샘플링
+6. 2번째 토큰 (확률적)    → Ct < 0.55이면 55%, 이상이면 25% 확률로 추가 문장
+7. sample_emoticon()      → 톤 + 위기 여부 + care_alpha → 이모티콘
+```
+
+#### 톤 가중치 주요 신호
+
+| 신호 | 영향 톤 |
+|-----|--------|
+| Ct ≥ θ | 위험↑↑, 경계↑, 불평↑, 행복↓, 흥분↓ |
+| hunger↑ | 불평↑↑ |
+| boredom↑ / loneliness↑ | 투정↑↑ |
+| fatigue↑ / depression↑ | 무기력↑↑ |
+| excitement↑ / curiosity↑ | 흥분↑↑ |
+| happiness↑ / satisfaction↑ | 행복↑↑ |
+| care_alpha↑ | 행복↑, 회복↑, 불평↓ |
+| care_alpha↓ | 불평↑, 무기력↑ |
+
 ## 변수 명명 규칙
 
 | 기호 | 코드 변수 | 설명 |
@@ -108,6 +169,7 @@ capacity < 0.25 : FEED / SNACK / PET / GROOM / IDLE / PLAY만 허용
 2. `CatProfile`에 필드 추가
 3. `_trait_for_action_state()`에 매핑 규칙 추가
 4. `crisis_score()` 또는 `crisis_threshold()`에 특성 가중치 반영
+5. `_tone_from_signals()`에 특성 기반 톤 가중치 반영
 
 ### 새 액션 추가 시
 1. `Action` enum에 항목 추가
@@ -116,8 +178,10 @@ capacity < 0.25 : FEED / SNACK / PET / GROOM / IDLE / PLAY만 허용
 4. `_policy_normal()` / `_policy_survival()` 스코어링 검토
 
 ### 단어풀 확장 시
-- `dialogue()` 내 `word_bank`를 외부 JSON으로 분리 후 로드
-- 현재 각 톤당 3개 → 목표 512개 (개념서 스펙)
+- `dialogue_bank_512.json` 작성 후 `attach_dialogue_bank(cat, path)` 호출
+- JSON 스키마: `tokens[].{id, text, category, tone[], intensity, tags[]}` + `emoticons[].{emoji, tone_weights{}}`
+- 카테고리 9종: 긍정감정어 / 부정감정어 / 중립행동어 / 요구투정어 / 경계거부어 / 먹이관련어 / 탐험관련어 / 회복반응어 / 개성고유어
+- `dialogue_bank`가 없으면 자동으로 레거시 인라인 word_bank로 fallback
 
 ### 배치 리플레이 확장 시
 - `tick()`을 이벤트 로그 기반으로 교체: `apply_action(action)` 직접 호출 후 `tick(hours=n)` 패턴 유지
@@ -129,4 +193,6 @@ capacity < 0.25 : FEED / SNACK / PET / GROOM / IDLE / PLAY만 허용
 - `capacity`는 단방향 감소 — 회복 로직은 현재 미구현 (BM 아이템 연동 예정)
 - `sit_events`는 `(t, old_mode, new_mode)` 튜플 리스트 — SIT 조건 충족 시에만 기록됨
 - `_trust_llr_proxy()`는 add-1 스무딩 적용 — 초기 틱에서 LLR이 0에 가까운 것이 정상
-- `import math`가 `_trust_llr_proxy()` 내부에 위치함 — 파일 상단으로 이동 고려 가능
+- `import math` / `import json`은 파일 상단에 위치
+- `DialogueBank._by_tone` 등 인덱스는 언더스코어로 시작하지만 `sample_dialogue()`에서 직접 접근함 — 공개 API 아님
+- `_tone_from_signals()`와 `_pick_tone()`은 로직이 다름: 전자는 softmax 확률 분포로 샘플링, 후자는 if-else 하드 결정

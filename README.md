@@ -1,4 +1,4 @@
-# CATLM Python Agent & Simulator
+# CATLM (Cat Adaptive Tiny Language Model) Python Agent & Simulator
 
 `catlm_simulator.py`는 CATLM 개념 정의서를 기반으로 만든 레퍼런스 Python 구현입니다.
 
