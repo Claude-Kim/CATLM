@@ -877,6 +877,68 @@ class CATLMAgent:
         elif action == Action.IDLE:
             self.care_alpha = max(0.0, self.care_alpha - 0.06)
 
+    def dump_full_state(self) -> Dict[str, Any]:
+        return {
+            "t": self.t,
+            "profile": {
+                "name": self.profile.name,
+                "activity": self.profile.activity,
+                "sociability": self.profile.sociability,
+                "appetite": self.profile.appetite,
+                "cowardice": self.profile.cowardice,
+            },
+            "state": {k.value: int(v) for k, v in self.state.values.items()},
+            "care_alpha": float(self.care_alpha),
+            "capacity": float(self.capacity),
+            "mode": self.mode.value,
+            "mode_persist": int(self.mode_persist),
+            "z": [float(self.z[0]), float(self.z[1])],
+            "crisis_streak": int(getattr(self, "crisis_streak", 0)),
+            "salvation_cooldown": int(getattr(self, "salvation_cooldown", 0)),
+            "surv_stats": {k: dict(v) for k, v in self._surv_stats.items()},
+            "sit_events": [[t, old.value, new.value] for t, old, new in self.sit_events],
+            "rng_state": _rng_state_to_str(self.rng),
+        }
+
+    def load_full_state(self, snap: Dict[str, Any]) -> None:
+        self.t = int(snap["t"])
+
+        # profile (traits)
+        p = snap["profile"]
+        self.profile.name = p["name"]
+        self.profile.activity = int(p["activity"])
+        self.profile.sociability = int(p["sociability"])
+        self.profile.appetite = int(p["appetite"])
+        self.profile.cowardice = int(p["cowardice"])
+
+        # state vector
+        for k, v in snap["state"].items():
+            self.state.values[State(k)] = int(v)
+
+        self.care_alpha = float(snap["care_alpha"])
+        self.capacity = float(snap["capacity"])
+        self.mode = Mode(snap["mode"])
+        self.mode_persist = int(snap.get("mode_persist", 0))
+        self.z = (float(snap["z"][0]), float(snap["z"][1]))
+
+        self.crisis_streak = int(snap.get("crisis_streak", 0))
+        self.salvation_cooldown = int(snap.get("salvation_cooldown", 0))
+        raw = snap.get("surv_stats", self._surv_stats)
+        self._surv_stats = {k: dict(v) for k, v in raw.items()}
+        self.sit_events = [(int(t), Mode(old), Mode(new)) for t, old, new in snap.get("sit_events", [])]
+
+        _rng_state_from_str(self.rng, snap["rng_state"])
+
+
+def _rng_state_to_str(rng: random.Random) -> str:
+    version, internalstate, gauss_next = rng.getstate()
+    return json.dumps({"version": version, "internalstate": list(internalstate), "gauss_next": gauss_next})
+
+
+def _rng_state_from_str(rng: random.Random, s: str) -> None:
+    d = json.loads(s)
+    rng.setstate((d["version"], tuple(d["internalstate"]), d["gauss_next"]))
+
 
 def run_demo(seed: int = 42) -> List[Tuple[str, float, str, str, float, float, str, int, float, int]]:
     cat = CATLMAgent(
