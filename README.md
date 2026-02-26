@@ -26,3 +26,5 @@ python3 catlm_simulator.py
 - 시뮬레이션 루프를 이벤트 로그 기반 배치 리플레이 방식으로 확장
 - 붕괴 단계 회복 조건(BM 아이템)을 실제 게임 경제 시스템과 연동
 
+## 관련 논문
+[text](https://zenodo.org/records/18780274)

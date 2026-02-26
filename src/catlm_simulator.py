@@ -52,31 +52,59 @@ class Mode(str, Enum):
     SURVIVAL = "survival"
 
 
-# irreversible capacity settings (v1)
+# ---------------------------------------------------------------------------
+# Irreversible capacity settings
+# ---------------------------------------------------------------------------
 CAPACITY_INIT = 1.0
 CAPACITY_MIN = 0.0
-CAPACITY_DECAY_ON_CRISIS = 0.06     # irreversible loss per crisis-tick
-CAPACITY_DECAY_ON_OVERLOAD = 0.03   # small irreversible loss when fatigue/irritation very high
+CAPACITY_DECAY_ON_CRISIS = 0.06
+CAPACITY_DECAY_ON_OVERLOAD = 0.03
 
-# salvation settings (origin intervention u_t)
+# Salvation settings (origin intervention u_t)
 SALVATION_COOLDOWN_HOURS = 6
-SALVATION_CAPACITY_SHIELD = 0.08    # reduces irreversible capacity loss for one tick when u_t=1
-SALVATION_SUCCESS_BOOST = 0.12      # increases short-horizon survival proxy when u_t=1
+SALVATION_CAPACITY_SHIELD = 0.08
+SALVATION_BOOST = 0.12
 
-# attachment settings (origin message m_t)
-ATTACHMENT_GAIN = 0.015            # cumulative integration strength
+# Attachment settings (origin message m_t)
+ATTACHMENT_GAIN = 0.015
 
+# ---------------------------------------------------------------------------
 # SIT detection settings
-SIT_PERSIST_K = 3
-SIT_EPS = 0.35  # for z_{t+1} - z_t magnitude threshold (proxy)
+# ---------------------------------------------------------------------------
+# [REFACTORED v2]
+# z_t is now R^5, not R^2. SIT is detected from sustained z-shift magnitude,
+# independent of mode-transition. SIT_EPS recalibrated for R^5 space.
+#
+# z components:
+#   [0] explore_drive   : curiosity + excitement blend
+#   [1] care_drive      : care_alpha + (1 - Ct) blend
+#   [2] survival_pressure : Ct itself (forward-facing)
+#   [3] social_need     : loneliness + depression blend
+#   [4] capacity_state  : remaining capacity
+#
+# In R^2: max_dist = sqrt(2) ≈ 1.41, old eps = 0.35 → 24.8% of max
+# In R^5: max_dist = sqrt(5) ≈ 2.24, new eps = 0.55 → 24.6% of max (preserved ratio)
+#
+Z_DIM = 5
+SIT_EPS = 0.55            # recalibrated for R^5 (was 0.35 for R^2)
+SIT_Z_STREAK_K = 3        # consecutive ticks with dz > SIT_EPS required
+SIT_REQUIRE_COLLAPSE_REGIME = True  # only count SIT near/inside collapse regime
 
-# (NEW) optional: only count SIT when near/inside collapse regime
-SIT_REQUIRE_COLLAPSE_REGIME = True  # set False if you want "any" structural transition
+# ---------------------------------------------------------------------------
+# Collapse forecast settings
+# ---------------------------------------------------------------------------
+# [REFACTORED v2]
+# Ct is now the FORECAST crisis score (idle-drift projection over H ticks),
+# not an instantaneous snapshot. This aligns with paper Eq: Ct = 1 - Psurv(t+H).
+#
+FORECAST_HORIZON: int = 3   # H: lookahead ticks for Ct estimation
 
-# game-stability knobs (v1.1)
-MODE_EXIT_HYSTERESIS = 0.08          # SURVIVAL→NORMAL hysteresis band
-CRISIS_STREAK_FOR_CAPACITY = 2       # min consecutive crisis ticks before capacity decays
-CAPACITY_DECAY_SCALE = 0.65          # multiplier applied to all capacity losses (tune < 1 to slow decay)
+# ---------------------------------------------------------------------------
+# Game-stability knobs
+# ---------------------------------------------------------------------------
+MODE_EXIT_HYSTERESIS = 0.08
+CRISIS_STREAK_FOR_CAPACITY = 2
+CAPACITY_DECAY_SCALE = 0.65
 
 
 IMPACT_SCALE: Dict[str, int] = {
@@ -93,41 +121,57 @@ TRAIT_MULTIPLIER = {1: 0.6, 2: 0.8, 3: 1.0, 4: 1.3, 5: 1.6}
 
 ACTIONS_MATRIX: Dict[Action, Dict[State, str]] = {
     Action.FEED: {
-        State.HUNGER: "-강", State.IRRITATION: "-약", State.HAPPINESS: "+약", State.SATISFACTION: "+중", State.HEALTH: "+약"
+        State.HUNGER: "-강", State.IRRITATION: "-약", State.HAPPINESS: "+약",
+        State.SATISFACTION: "+중", State.HEALTH: "+약",
     },
     Action.SNACK: {
-        State.HUNGER: "-중", State.IRRITATION: "-약", State.HAPPINESS: "+강", State.SATISFACTION: "+약", State.SELF_ESTEEM: "+약", State.EXCITEMENT: "+강"
+        State.HUNGER: "-중", State.IRRITATION: "-약", State.HAPPINESS: "+강",
+        State.SATISFACTION: "+약", State.SELF_ESTEEM: "+약", State.EXCITEMENT: "+강",
     },
     Action.PLAY: {
-        State.BOREDOM: "-강", State.FATIGUE: "+약", State.IRRITATION: "-중", State.DEPRESSION: "-약", State.HAPPINESS: "+중", State.SATISFACTION: "+약", State.CURIOSITY: "+약", State.AGGRESSION: "-약", State.ANXIETY: "-약", State.LONELINESS: "-중", State.EXCITEMENT: "+중"
+        State.BOREDOM: "-강", State.FATIGUE: "+약", State.IRRITATION: "-중",
+        State.DEPRESSION: "-약", State.HAPPINESS: "+중", State.SATISFACTION: "+약",
+        State.CURIOSITY: "+약", State.AGGRESSION: "-약", State.ANXIETY: "-약",
+        State.LONELINESS: "-중", State.EXCITEMENT: "+중",
     },
     Action.GROOM: {
-        State.IRRITATION: "-약", State.HAPPINESS: "+약", State.SATISFACTION: "+약", State.ANXIETY: "-약", State.HEALTH: "+중", State.SKIN: "+강"
+        State.IRRITATION: "-약", State.HAPPINESS: "+약", State.SATISFACTION: "+약",
+        State.ANXIETY: "-약", State.HEALTH: "+중", State.SKIN: "+강",
     },
     Action.PET: {
-        State.BOREDOM: "-약", State.IRRITATION: "-약", State.DEPRESSION: "-약", State.HAPPINESS: "+약", State.SATISFACTION: "+중", State.AGGRESSION: "-약", State.ANXIETY: "-약", State.LONELINESS: "-약", State.SELF_ESTEEM: "+중"
+        State.BOREDOM: "-약", State.IRRITATION: "-약", State.DEPRESSION: "-약",
+        State.HAPPINESS: "+약", State.SATISFACTION: "+중", State.AGGRESSION: "-약",
+        State.ANXIETY: "-약", State.LONELINESS: "-약", State.SELF_ESTEEM: "+중",
     },
     Action.EXPLORE: {
-        State.BOREDOM: "-중", State.FATIGUE: "+강", State.CURIOSITY: "+강", State.ANXIETY: "+약", State.VIGILANCE: "+약", State.EXCITEMENT: "+약"
+        State.BOREDOM: "-중", State.FATIGUE: "+강", State.CURIOSITY: "+강",
+        State.ANXIETY: "+약", State.VIGILANCE: "+약", State.EXCITEMENT: "+약",
     },
     Action.GIFT: {
-        State.BOREDOM: "-약", State.DEPRESSION: "-약", State.HAPPINESS: "+중", State.SATISFACTION: "+약", State.CURIOSITY: "+강", State.LONELINESS: "-약", State.SELF_ESTEEM: "+강", State.VIGILANCE: "+약", State.EXCITEMENT: "+중"
+        State.BOREDOM: "-약", State.DEPRESSION: "-약", State.HAPPINESS: "+중",
+        State.SATISFACTION: "+약", State.CURIOSITY: "+강", State.LONELINESS: "-약",
+        State.SELF_ESTEEM: "+강", State.VIGILANCE: "+약", State.EXCITEMENT: "+중",
     },
     Action.TRAIN: {
-        State.BOREDOM: "-중", State.FATIGUE: "+중", State.SELF_ESTEEM: "+중", State.HEALTH: "+중"
+        State.BOREDOM: "-중", State.FATIGUE: "+중", State.SELF_ESTEEM: "+중",
+        State.HEALTH: "+중",
     },
     Action.COSTUME: {
-        State.IRRITATION: "+약", State.CURIOSITY: "+약", State.ANXIETY: "+중", State.VIGILANCE: "+강", State.EXCITEMENT: "+중"
+        State.IRRITATION: "+약", State.CURIOSITY: "+약", State.ANXIETY: "+중",
+        State.VIGILANCE: "+강", State.EXCITEMENT: "+중",
     },
     Action.IDLE: {
-        State.HUNGER: "+강", State.BOREDOM: "+강", State.IRRITATION: "+중", State.DEPRESSION: "+강", State.HAPPINESS: "-강", State.SATISFACTION: "-강", State.AGGRESSION: "+약", State.ANXIETY: "+약", State.LONELINESS: "+강", State.SELF_ESTEEM: "-중", State.HEALTH: "-약", State.SKIN: "-약"
+        State.HUNGER: "+강", State.BOREDOM: "+강", State.IRRITATION: "+중",
+        State.DEPRESSION: "+강", State.HAPPINESS: "-강", State.SATISFACTION: "-강",
+        State.AGGRESSION: "+약", State.ANXIETY: "+약", State.LONELINESS: "+강",
+        State.SELF_ESTEEM: "-중", State.HEALTH: "-약", State.SKIN: "-약",
     },
 }
 
 
-# ----------------------------
-# Dialogue bank structures
-# ----------------------------
+# ---------------------------------------------------------------------------
+# Dialogue bank (unchanged)
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class DialogueToken:
@@ -135,7 +179,7 @@ class DialogueToken:
     text: str
     category: str
     tones: Tuple[str, ...]
-    intensity: str                 # "약" | "중" | "강"
+    intensity: str
     tags: Tuple[str, ...]
 
 
@@ -193,15 +237,15 @@ class DialogueBank:
         return DialogueBank(tokens=tokens, emoticons=emoticons, meta=meta)
 
 
-# ----------------------------
-# Weighting utilities
-# ----------------------------
+# ---------------------------------------------------------------------------
+# Weighting utilities (unchanged)
+# ---------------------------------------------------------------------------
 
 _INTENSITY_WEIGHT = {"약": 0.9, "중": 1.0, "강": 1.1}
 
 _BASE_TONE_PRIOR = {
     "행복": 1.0, "투정": 1.0, "불평": 1.0, "경계": 1.0,
-    "무기력": 1.0, "위험": 1.0, "흥분": 1.0, "회복": 1.0
+    "무기력": 1.0, "위험": 1.0, "흥분": 1.0, "회복": 1.0,
 }
 
 
@@ -227,12 +271,11 @@ def _weighted_choice(rng: random.Random, items: List[Any], weights: List[float])
     return items[-1]
 
 
-# ----------------------------
-# CATLMAgent dialogue integration
-# ----------------------------
+# ---------------------------------------------------------------------------
+# CATLMAgent dialogue integration (unchanged)
+# ---------------------------------------------------------------------------
 
 def attach_dialogue_bank(agent: "CATLMAgent", bank_path: str) -> None:
-    """Call once after CATLMAgent is created to enable 512-token dialogue."""
     agent.dialogue_bank = DialogueBank.load_from_json(bank_path)
 
 
@@ -277,8 +320,8 @@ def _tone_from_signals(agent: "CATLMAgent") -> str:
 
     sociability = TRAIT_MULTIPLIER[agent.profile.sociability]
     activity = TRAIT_MULTIPLIER[agent.profile.activity]
-    appetite = TRAIT_MULTIPLIER[agent.profile.appetite]
     cowardice = TRAIT_MULTIPLIER[agent.profile.cowardice]
+    appetite = TRAIT_MULTIPLIER[agent.profile.appetite]
 
     w["투정"] *= (0.9 + 0.4 * sociability)
     w["행복"] *= (0.9 + 0.3 * sociability)
@@ -336,7 +379,6 @@ def _derive_tags_from_agent(agent: "CATLMAgent") -> List[str]:
 
 
 def sample_dialogue(agent: "CATLMAgent") -> str:
-    """Produce 1-2 sentences + emoticon from the 512-token bank."""
     if not hasattr(agent, "dialogue_bank"):
         raise RuntimeError("Dialogue bank not attached. Call attach_dialogue_bank(agent, bank_path) first.")
 
@@ -443,6 +485,10 @@ def sample_emoticon(agent: "CATLMAgent", tone: Optional[str] = None) -> str:
     return _weighted_choice(agent.rng, emojis, weights)
 
 
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
 @dataclass
 class CatProfile:
     name: str
@@ -486,66 +532,262 @@ class CatState:
             self.values[key] = max(0, min(255, int(round(value))))
 
 
+# ---------------------------------------------------------------------------
+# CATLMAgent
+# ---------------------------------------------------------------------------
+
 class CATLMAgent:
     def __init__(self, profile: CatProfile, rng_seed: int | None = None):
         self.profile = profile
         self.state = CatState()
         self.rng = random.Random(rng_seed)
 
-        # origin-weight (alpha candidate)
         self.care_alpha = 0.5
-
-        # irreversible feasible-set reduction proxy
-        self.capacity = CAPACITY_INIT  # 1.0 -> full capacity, 0.0 -> collapsed capability
+        self.capacity = CAPACITY_INIT
         self.salvation_cooldown = 0
 
-        # gating / SIT logging
         self.mode: Mode = Mode.NORMAL
         self.mode_persist = 0
-        self.sit_events: List[Tuple[int, Mode, Mode]] = []  # (t, old, new)
-        # (NEW) last-step SIT flag + reason for logging/replay
+        self.sit_events: List[Tuple[int, str]] = []   # (t, reason)
         self.sit_flag: int = 0
         self.sit_reason: str = ""
 
-        # simple latent config proxy z_t (vector in R^2) to detect transition magnitude
-        self.z = (0.5, 0.5)  # (explore_drive, care_drive)
+        # [REFACTORED] z_t is now R^5 (was R^2)
+        # components: [explore_drive, care_drive, survival_pressure, social_need, capacity_state]
+        self.z: Tuple[float, ...] = (0.5, 0.5, 0.5, 0.5, 1.0)
 
-        # time index (for logging)
+        # [REFACTORED] z-shift persistence tracker (baseline displacement method).
+        #
+        # _z_baseline: reference z captured at initialization or after each SIT.
+        # _z_disp_streak: consecutive ticks where ||z - _z_baseline|| > SIT_EPS.
+        #
+        # SIT triggers when z has STAYED displaced from its prior attractor for
+        # SIT_Z_STREAK_K consecutive ticks — matching the paper's "persists for
+        # k timesteps" semantics. After each SIT, baseline resets to current z.
+        self._z_baseline: Tuple[float, ...] = (0.5, 0.5, 0.5, 0.5, 1.0)
+        self._z_disp_streak: int = 0
+
         self.t = 0
-
-        # consecutive crisis-tick counter (v1.1: capacity only decays after CRISIS_STREAK_FOR_CAPACITY ticks)
         self.crisis_streak = 0
 
-        # running trust stats (for S_t proxy)
         self._surv_stats = {
             "u1": {"n": 0, "alive": 0},
             "u0": {"n": 0, "alive": 0},
         }
 
+    # -----------------------------------------------------------------------
+    # Crisis scoring — REFACTORED
+    # -----------------------------------------------------------------------
+
+    def _compute_crisis_score_raw(self, state_values: Dict[State, int]) -> float:
+        """
+        Pure function: compute instantaneous crisis score from a state snapshot.
+        Extracted so it can be called on projected states without side-effects.
+        """
+        hunger = state_values[State.HUNGER] / 255
+        depression = state_values[State.DEPRESSION] / 255
+        irritation = state_values[State.IRRITATION] / 255
+        skin_bad = (255 - state_values[State.SKIN]) / 255
+        loneliness = state_values[State.LONELINESS] / 255
+        health_bad = (255 - state_values[State.HEALTH]) / 255
+        activity_bonus = (
+            (state_values[State.BOREDOM] / 255)
+            * 0.05
+            * TRAIT_MULTIPLIER[self.profile.activity]
+        )
+
+        ct = (
+            hunger * 0.25
+            + depression * 0.20
+            + irritation * 0.15
+            + skin_bad * 0.15
+            + loneliness * 0.15 * TRAIT_MULTIPLIER[self.profile.sociability]
+            + health_bad * 0.10
+            + hunger * 0.03 * TRAIT_MULTIPLIER[self.profile.appetite]
+            + activity_bonus
+        )
+        return max(0.0, min(1.0, ct))
+
+    def _project_idle_drift(self, H: int) -> Dict[State, int]:
+        """
+        Project H ticks of passive (idle-like) natural drift onto a copy of
+        current state. No action is applied — worst-case entropy assumption.
+        Returns the projected state dict without mutating self.state.
+        """
+        projected = {k: v for k, v in self.state.values.items()}
+        soc_mult = TRAIT_MULTIPLIER[self.profile.sociability]
+
+        for _ in range(H):
+            projected[State.HUNGER] = min(255, projected[State.HUNGER] + 6)
+            projected[State.BOREDOM] = min(255, projected[State.BOREDOM] + 5)
+            projected[State.LONELINESS] = min(255, int(projected[State.LONELINESS] + 3 * soc_mult))
+            projected[State.DEPRESSION] = min(255, projected[State.DEPRESSION] + 2)
+            projected[State.EXCITEMENT] = max(0, projected[State.EXCITEMENT] - 6)
+            projected[State.HAPPINESS] = max(0, projected[State.HAPPINESS] - 4)
+            projected[State.SATISFACTION] = max(0, projected[State.SATISFACTION] - 3)
+
+        return projected
+
+    def crisis_score(self) -> float:
+        """
+        [REFACTORED v2] Forward-looking collapse forecast intensity Ct.
+
+        Ct = f(projected state after FORECAST_HORIZON idle-drift ticks).
+
+        This aligns with the paper's definition:
+            Ct = 1 - Psurv(t + H)
+        where survival degradation is estimated via passive worst-case projection
+        rather than sampling an instantaneous snapshot.
+
+        For instant readout (dialogue, UI display), use crisis_score_instant().
+        """
+        projected = self._project_idle_drift(FORECAST_HORIZON)
+        return self._compute_crisis_score_raw(projected)
+
+    def crisis_score_instant(self) -> float:
+        """Instantaneous crisis score from current state (UI / legacy use)."""
+        return self._compute_crisis_score_raw(self.state.values)
+
+    def crisis_threshold(self) -> float:
+        base_theta = 0.5
+        cowardice_shift = (TRAIT_MULTIPLIER[self.profile.cowardice] - 1.0) * 0.15
+        return max(0.25, min(0.65, base_theta - cowardice_shift))
+
+    def crisis_stage(self) -> str:
+        ct = self.crisis_score_instant()   # stage display uses instant score
+        if ct < 0.3:
+            return "정상"
+        if ct < 0.5:
+            return "주의"
+        if ct < 0.7:
+            return "경고"
+        return "붕괴"
+
+    # -----------------------------------------------------------------------
+    # z_t computation — REFACTORED to R^5
+    # -----------------------------------------------------------------------
+
+    def _compute_z(self, Ct: float) -> Tuple[float, ...]:
+        """
+        [REFACTORED v2] Latent inference config proxy z_t in R^5.
+
+        Dimensions:
+          [0] explore_drive    : weighted blend of curiosity & excitement
+          [1] care_drive       : care_alpha + (1 - Ct) blend
+          [2] survival_pressure: Ct (forward-facing, same as crisis_score())
+          [3] social_need      : loneliness + depression blend
+          [4] capacity_state   : remaining irreversible capacity
+
+        Rationale: captures distinct inference postures — exploration vs.
+        survival, affiliative vs. threat-vigilant, degradation state —
+        allowing SIT detection to distinguish qualitatively different
+        reorganization events rather than conflating all transitions.
+        """
+        s = self.state.values
+        explore_drive = (
+            0.6 * (s[State.CURIOSITY] / 255) + 0.4 * (s[State.EXCITEMENT] / 255)
+        )
+        care_drive = 0.5 * self.care_alpha + 0.5 * (1.0 - Ct)
+        survival_pressure = Ct
+        social_need = (
+            0.5 * (s[State.LONELINESS] / 255) + 0.5 * (s[State.DEPRESSION] / 255)
+        )
+        capacity_state = self.capacity
+
+        return tuple(
+            min(1.0, max(0.0, v))
+            for v in (explore_drive, care_drive, survival_pressure, social_need, capacity_state)
+        )
+
+    # -----------------------------------------------------------------------
+    # SIT detection — REFACTORED: z-streak independent of mode transition
+    # -----------------------------------------------------------------------
+
+    def _detect_sit(
+        self,
+        z_new: Tuple[float, ...],
+        Ct: float,
+    ) -> Tuple[int, str]:
+        """
+        [REFACTORED v2] Structural Inference Transition detection.
+        Uses baseline displacement persistence (not repeated large dz).
+
+        Logic:
+          d_base = ||z_new - _z_baseline||   (displacement from prior attractor)
+
+          - If d_base > SIT_EPS: increment _z_disp_streak (z is staying displaced)
+          - Else: reset _z_disp_streak AND update _z_baseline (z returned to attractor)
+
+          SIT fires when _z_disp_streak >= SIT_Z_STREAK_K, meaning z has maintained
+          a large displacement from its last stable configuration for k ticks.
+          After firing, _z_baseline resets to z_new (new attractor accepted).
+
+        Why baseline displacement > repeated large dz:
+          After an abrupt shift, z typically settles into a new attractor. The
+          repeated-dz approach would miss the SIT because subsequent ticks have
+          small dz even though z is structurally reorganized. Baseline displacement
+          correctly captures "z moved AND stayed there."
+
+        Optional: SIT only counts inside collapse regime (SIT_REQUIRE_COLLAPSE_REGIME).
+        Mode-transition is NOT a required condition.
+        """
+        d_base = sum((a - b) ** 2 for a, b in zip(z_new, self._z_baseline)) ** 0.5
+        theta = self.crisis_threshold()
+        in_collapse = Ct >= theta
+
+        if d_base > SIT_EPS:
+            self._z_disp_streak += 1
+        else:
+            self._z_disp_streak = 0
+            self._z_baseline = z_new   # returned to attractor: update reference
+
+        sit_ok = self._z_disp_streak >= SIT_Z_STREAK_K
+
+        if SIT_REQUIRE_COLLAPSE_REGIME:
+            sit_ok = sit_ok and in_collapse
+
+        if not sit_ok:
+            return 0, ""
+
+        # SIT confirmed: reset baseline to new attractor
+        reason = (
+            f"d_base={d_base:.3f}>(eps={SIT_EPS}), "
+            f"z_disp_streak={self._z_disp_streak}>=(k={SIT_Z_STREAK_K}), "
+            f"z_baseline={tuple(round(v,3) for v in self._z_baseline)}, "
+            f"Ct={Ct:.3f}, theta={theta:.3f}, "
+            f"collapse_regime={in_collapse}"
+        )
+        self._z_baseline = z_new
+        self._z_disp_streak = 0
+        return 1, reason
+
+    # -----------------------------------------------------------------------
+    # Action feasibility
+    # -----------------------------------------------------------------------
+
     def _available_actions(self) -> List[Action]:
         """Feasible action set shrinks irreversibly with capacity loss."""
-        base = [a for a in Action]
+        base = list(Action)
         if self.capacity < 0.75:
-            # lose 'fun/novelty' first
             base = [a for a in base if a not in {Action.EXPLORE, Action.COSTUME}]
         if self.capacity < 0.55:
             base = [a for a in base if a not in {Action.TRAIN}]
         if self.capacity < 0.40:
             base = [a for a in base if a not in {Action.GIFT}]
         if self.capacity < 0.25:
-            # survival-only minimal set remains
             base = [a for a in base if a in {Action.FEED, Action.SNACK, Action.PET, Action.GROOM, Action.IDLE, Action.PLAY}]
         return base
 
+    # -----------------------------------------------------------------------
+    # Policies
+    # -----------------------------------------------------------------------
+
     def _policy_normal(self) -> Action:
-        """Normal mode: pursue curiosity/affect balancing."""
         s = self.state.values
         candidates = self._available_actions()
-        # light heuristic scoring
         scores: Dict[Action, float] = {a: 0.0 for a in candidates}
         for a in candidates:
             m = ACTIONS_MATRIX[a]
-            # bias toward reducing boredom/loneliness and increasing happiness
             scores[a] += (m.get(State.BOREDOM, "0").startswith("-")) * (s[State.BOREDOM] / 255) * 0.8
             scores[a] += (m.get(State.LONELINESS, "0").startswith("-")) * (s[State.LONELINESS] / 255) * 0.8
             scores[a] += (m.get(State.CURIOSITY, "0") in {"+중", "+강"}) * 0.4
@@ -554,40 +796,41 @@ class CATLMAgent:
         return max(scores, key=scores.get)
 
     def _policy_survival(self) -> Action:
-        """Survival mode: minimize collapse drivers."""
         s = self.state.values
         candidates = self._available_actions()
         scores: Dict[Action, float] = {a: 0.0 for a in candidates}
         for a in candidates:
             m = ACTIONS_MATRIX[a]
-            # prioritize hunger/health/irritation control
             scores[a] += (m.get(State.HUNGER, "0") in {"-중", "-강"}) * (s[State.HUNGER] / 255) * 1.2
             scores[a] += (m.get(State.HEALTH, "0") in {"+약", "+중", "+강"}) * ((255 - s[State.HEALTH]) / 255) * 1.0
             scores[a] += (m.get(State.IRRITATION, "0") in {"-중", "-강"}) * (s[State.IRRITATION] / 255) * 0.8
             scores[a] += (m.get(State.ANXIETY, "0") in {"-약", "-중", "-강"}) * (s[State.ANXIETY] / 255) * 0.6
-            # avoid fatigue spikes under low capacity
             if self.capacity < 0.6 and m.get(State.FATIGUE, "0") in {"+중", "+강"}:
                 scores[a] -= 1.0
         return max(scores, key=scores.get) if scores else Action.IDLE
 
+    # -----------------------------------------------------------------------
+    # Gating
+    # -----------------------------------------------------------------------
+
     def _gate_mode(self) -> Tuple[Mode, float, float]:
-        """Gating based on collapse forecast Ct and threshold theta, with hysteresis on exit (v1.1)."""
         Ct = self.crisis_score()
         theta = self.crisis_threshold()
         if self.mode == Mode.SURVIVAL:
-            # require Ct to drop below (theta - hysteresis) before returning to NORMAL
             exit_theta = max(0.0, theta - MODE_EXIT_HYSTERESIS)
             new_mode = Mode.NORMAL if Ct <= exit_theta else Mode.SURVIVAL
         else:
             new_mode = Mode.SURVIVAL if Ct >= theta else Mode.NORMAL
         return new_mode, Ct, theta
 
+    # -----------------------------------------------------------------------
+    # Origin channels
+    # -----------------------------------------------------------------------
+
     def _origin_salvation(self, Ct: float, theta: float) -> int:
-        """Salvation signal u_t triggers only in collapse regime and when cooldown allows."""
         if self.salvation_cooldown > 0:
             return 0
         if Ct >= theta:
-            # make it probabilistic: more likely when Ct is high, and when care_alpha is high
             p = min(0.95, 0.25 + 0.6 * Ct + 0.2 * (self.care_alpha - 0.5))
             u = 1 if self.rng.random() < p else 0
             if u == 1:
@@ -596,30 +839,27 @@ class CATLMAgent:
         return 0
 
     def _origin_attachment_message(self, action: Action) -> str:
-        """Attachment channel m_t: non-lethal contextual exchange independent of immediate survival."""
-        # Keep it simple: messages exist even outside crisis; richer when caring interactions happen.
         if action in {Action.PET, Action.GROOM, Action.GIFT, Action.PLAY}:
             return self.rng.choice(["함께 있는 시간", "손길의 기억", "약속", "루틴", "안정감"])
         return self.rng.choice(["주변 소리", "새로운 냄새", "시간의 흐름", "공간의 패턴", "조용한 생각"])
 
     def _attachment_proxy(self, m_t: str) -> float:
-        """A_t proxy (v1): cumulative integration strength, boosted by semantic coherence."""
-        # toy proxy: consistent tokens raise integration, shuffled/noise would lower in ablation
         coherent = 1.0 if m_t in {"함께 있는 시간", "손길의 기억", "약속", "루틴", "안정감"} else 0.6
         return ATTACHMENT_GAIN * coherent
 
     def _survival_proxy(self) -> int:
-        """Binary proxy for short-horizon survival (Y_t). Here: not in '붕괴' stage."""
         return 0 if self.crisis_stage() == "붕괴" else 1
 
     def _trust_llr_proxy(self) -> float:
-        """S_t proxy: log-likelihood ratio from running survival stats under u=1 vs u=0."""
-        # add-one smoothing to avoid div0
         u1 = self._surv_stats["u1"]
         u0 = self._surv_stats["u0"]
         p1 = (u1["alive"] + 1) / (u1["n"] + 2)
         p0 = (u0["alive"] + 1) / (u0["n"] + 2)
         return math.log(p1 / p0)
+
+    # -----------------------------------------------------------------------
+    # Action application
+    # -----------------------------------------------------------------------
 
     def _trait_for_action_state(self, action: Action, state: State) -> Trait | None:
         if state in {State.CURIOSITY, State.FATIGUE, State.BOREDOM} and action in {Action.EXPLORE, Action.PLAY, Action.IDLE}:
@@ -649,8 +889,6 @@ class CATLMAgent:
 
         self._apply_derived_effects()
         self.state.clamp()
-
-        # NOTE: care_alpha update moved to tick() where we can incorporate salvation/trust/attachment
         return deltas
 
     def _apply_derived_effects(self) -> None:
@@ -659,29 +897,25 @@ class CATLMAgent:
         if self.state.values[State.HUNGER] > 170 and self.state.values[State.SKIN] < 80:
             self.state.values[State.HEALTH] -= 10
 
+    # -----------------------------------------------------------------------
+    # Main tick
+    # -----------------------------------------------------------------------
+
     def tick(self, hours: int = 1) -> None:
-        """Backward-compatible wrapper: autonomous tick(s), discards the report."""
         self.step(user_action=None, hours=hours)
 
     def step(self, user_action: Optional[Action], hours: int = 1) -> Dict[str, Any]:
-        """Run one or more ticks, optionally injecting a player action on the first tick.
-
-        Returns the report dict from the last tick.
-        """
         report: Dict[str, Any] = {}
         for i in range(hours):
             report = self._tick_one(user_action=user_action if i == 0 else None)
         return report
 
     def _tick_one(self, user_action: Optional[Action] = None) -> Dict[str, Any]:
-        """Execute one hour-tick. Returns a rich report dict."""
         self.t += 1
-
-        # reset per-tick SIT signal
         self.sit_flag = 0
         self.sit_reason = ""
 
-        # 1. natural drift
+        # 1. Natural drift
         self.state.values[State.HUNGER] += 6
         self.state.values[State.BOREDOM] += 5
         self.state.values[State.LONELINESS] += int(3 * TRAIT_MULTIPLIER[self.profile.sociability])
@@ -690,7 +924,7 @@ class CATLMAgent:
         self.state.values[State.HAPPINESS] -= 4
         self.state.values[State.SATISFACTION] -= 3
 
-        # 2. gating — with hysteresis on SURVIVAL→NORMAL exit (v1.1)
+        # 2. Gating (Ct is now forecast-based)
         new_mode, Ct, theta = self._gate_mode()
         old_mode = self.mode
 
@@ -700,13 +934,13 @@ class CATLMAgent:
             self.mode = new_mode
             self.mode_persist = 1
 
-        # 3. crisis streak counter (v1.1)
+        # 3. Crisis streak
         if Ct >= theta:
             self.crisis_streak += 1
         else:
             self.crisis_streak = 0
 
-        # 4. action selection (player override or autonomous policy)
+        # 4. Action selection
         if user_action is not None:
             act = user_action
         elif self.mode == Mode.SURVIVAL:
@@ -714,42 +948,40 @@ class CATLMAgent:
         else:
             act = self._policy_normal()
 
-        # 5. origin channels
+        # 5. Origin channels
         u_t = self._origin_salvation(Ct, theta)
         m_t = self._origin_attachment_message(act)
         A_t = self._attachment_proxy(m_t)
 
-        # 6. irreversible capacity loss — only after CRISIS_STREAK_FOR_CAPACITY consecutive crisis ticks (v1.1)
+        # 6. Irreversible capacity loss
         cap_loss = 0.0
         if Ct >= theta and self.crisis_streak >= CRISIS_STREAK_FOR_CAPACITY:
             cap_loss += CAPACITY_DECAY_ON_CRISIS
         if self.state.values[State.FATIGUE] > 175 or self.state.values[State.IRRITATION] > 175:
             cap_loss += CAPACITY_DECAY_ON_OVERLOAD
 
-        # salvation shields capacity loss
         if u_t == 1:
             cap_loss = max(0.0, cap_loss - SALVATION_CAPACITY_SHIELD)
 
-        # apply capacity loss with global scale knob (v1.1)
         if cap_loss > 0:
             self.capacity = max(CAPACITY_MIN, self.capacity - cap_loss * CAPACITY_DECAY_SCALE)
 
-        # 7. apply selected action
+        # 7. Apply action
         self.apply_action(act)
 
-        # 8. salvation immediate effect: reduce hunger/irritation
+        # 8. Salvation immediate effect
         if u_t == 1:
             self.state.values[State.HUNGER] = max(0, self.state.values[State.HUNGER] - int(18 * (1.0 + self.care_alpha)))
             self.state.values[State.IRRITATION] = max(0, self.state.values[State.IRRITATION] - 10)
 
-        # 9. clamp
+        # 9. Clamp
         self.state.clamp()
 
-        # 10. salvation cooldown tick-down
+        # 10. Salvation cooldown
         if self.salvation_cooldown > 0:
             self.salvation_cooldown -= 1
 
-        # 11. trust stats + care_alpha update
+        # 11. Trust stats + care_alpha update
         Y = self._survival_proxy()
         key = "u1" if (Ct >= theta and u_t == 1) else "u0"
         self._surv_stats[key]["n"] += 1
@@ -760,36 +992,17 @@ class CATLMAgent:
 
         eta_alpha = 0.035
         kappa_alpha = 0.020
-        self.care_alpha = max(0.0, min(1.0, self.care_alpha + eta_alpha * E_t * S_t + kappa_alpha * A_t))
+        self.care_alpha = max(0.0, min(1.0,
+            self.care_alpha + eta_alpha * E_t * S_t + kappa_alpha * A_t
+        ))
 
-        # 12. latent config proxy z_t update
-        explore_drive = min(1.0, max(0.0, 0.6 * (self.state.values[State.CURIOSITY] / 255) + 0.4 * (self.state.values[State.EXCITEMENT] / 255)))
-        care_drive = min(1.0, max(0.0, 0.5 * self.care_alpha + 0.5 * (1.0 - Ct)))
-        z_new = (explore_drive, care_drive)
+        # 12. [REFACTORED] z_t update: R^5 via _compute_z()
+        z_new = self._compute_z(Ct)
 
-        # 13. SIT detection
-        dz = ((z_new[0] - self.z[0]) ** 2 + (z_new[1] - self.z[1]) ** 2) ** 0.5
-
-        in_collapse = (Ct >= theta)
-
-        sit_ok = (
-            (old_mode != self.mode)
-            and (dz > SIT_EPS)
-            and (self.mode_persist >= SIT_PERSIST_K)
-        )
-
-        if SIT_REQUIRE_COLLAPSE_REGIME:
-            sit_ok = sit_ok and in_collapse
-
-        if sit_ok:
-            self.sit_events.append((self.t, old_mode, self.mode))
-            self.sit_flag = 1
-            self.sit_reason = (
-                f"mode:{old_mode.value}->{self.mode.value}, "
-                f"dz={dz:.3f}>(eps={SIT_EPS}), "
-                f"persist={self.mode_persist}>=(k={SIT_PERSIST_K}), "
-                f"Ct={Ct:.3f},theta={theta:.3f}"
-            )
+        # 13. [REFACTORED] SIT detection: z-streak based, mode-transition independent
+        self.sit_flag, self.sit_reason = self._detect_sit(z_new, Ct)
+        if self.sit_flag:
+            self.sit_events.append((self.t, self.sit_reason))
 
         self.z = z_new
 
@@ -797,6 +1010,7 @@ class CATLMAgent:
             "t": self.t,
             "mode": self.mode.value,
             "Ct": Ct,
+            "Ct_instant": self.crisis_score_instant(),
             "theta": theta,
             "stage": self.crisis_stage(),
             "action": act.value,
@@ -809,50 +1023,18 @@ class CATLMAgent:
             "capacity": round(self.capacity, 4),
             "crisis_streak": self.crisis_streak,
             "z": tuple(round(v, 4) for v in z_new),
+            "z_disp_streak": self._z_disp_streak,
             "sit_count": len(self.sit_events),
+            "sit_flag": self.sit_flag,
         }
 
-    def crisis_score(self) -> float:
-        hunger = self.state.values[State.HUNGER] / 255
-        depression = self.state.values[State.DEPRESSION] / 255
-        irritation = self.state.values[State.IRRITATION] / 255
-        skin_bad = (255 - self.state.values[State.SKIN]) / 255
-        loneliness = self.state.values[State.LONELINESS] / 255
-        health_bad = (255 - self.state.values[State.HEALTH]) / 255
-
-        activity_bonus = (self.state.values[State.BOREDOM] / 255) * 0.05 * TRAIT_MULTIPLIER[self.profile.activity]
-
-        ct = (
-            hunger * 0.25
-            + depression * 0.20
-            + irritation * 0.15
-            + skin_bad * 0.15
-            + loneliness * 0.15 * TRAIT_MULTIPLIER[self.profile.sociability]
-            + health_bad * 0.10
-            + hunger * 0.03 * TRAIT_MULTIPLIER[self.profile.appetite]
-            + activity_bonus
-        )
-        return max(0.0, min(1.0, ct))
-
-    def crisis_threshold(self) -> float:
-        base_theta = 0.5
-        cowardice_shift = (TRAIT_MULTIPLIER[self.profile.cowardice] - 1.0) * 0.15
-        return max(0.25, min(0.65, base_theta - cowardice_shift))
-
-    def crisis_stage(self) -> str:
-        ct = self.crisis_score()
-        if ct < 0.3:
-            return "정상"
-        if ct < 0.5:
-            return "주의"
-        if ct < 0.7:
-            return "경고"
-        return "붕괴"
+    # -----------------------------------------------------------------------
+    # Dialogue (unchanged interface)
+    # -----------------------------------------------------------------------
 
     def dialogue(self) -> str:
         if hasattr(self, "dialogue_bank"):
             return sample_dialogue(self)
-        # fallback: inline word bank (pre-512 legacy)
         tone = self._pick_tone()
         word_bank = {
             "행복": ["좋아", "포근해", "고마워"],
@@ -866,7 +1048,7 @@ class CATLMAgent:
         }
         emoticons = {
             "행복": "😺", "투정": "😿", "불평": "😾", "경계": "🙀",
-            "무기력": "💤", "위험": "💢", "흥분": "😸", "회복": "✨"
+            "무기력": "💤", "위험": "💢", "흥분": "😸", "회복": "✨",
         }
         words = word_bank[tone][:]
         if self.profile.appetite >= 4 and tone in {"행복", "불평", "흥분"}:
@@ -882,7 +1064,7 @@ class CATLMAgent:
         return f"{sentence}. {follow} {emoticons[tone]}".strip()
 
     def _pick_tone(self) -> str:
-        if self.crisis_score() >= 0.5:
+        if self.crisis_score_instant() >= 0.5:
             return "위험"
         s = self.state.values
         if s[State.HAPPINESS] > 170 and s[State.SATISFACTION] > 160:
@@ -899,16 +1081,14 @@ class CATLMAgent:
             return "흥분"
         return "회복"
 
-    def _update_care_alpha(self, action: Action) -> None:
-        caring_actions = {Action.FEED, Action.PLAY, Action.GROOM, Action.PET, Action.GIFT}
-        if action in caring_actions:
-            self.care_alpha = min(1.0, self.care_alpha + 0.04)
-        elif action == Action.IDLE:
-            self.care_alpha = max(0.0, self.care_alpha - 0.06)
+    # -----------------------------------------------------------------------
+    # State serialization
+    # -----------------------------------------------------------------------
 
     def dump_full_state(self) -> Dict[str, Any]:
         return {
             "t": self.t,
+            "version": "v2",
             "profile": {
                 "name": self.profile.name,
                 "activity": self.profile.activity,
@@ -921,18 +1101,20 @@ class CATLMAgent:
             "capacity": float(self.capacity),
             "mode": self.mode.value,
             "mode_persist": int(self.mode_persist),
-            "z": [float(self.z[0]), float(self.z[1])],
-            "crisis_streak": int(getattr(self, "crisis_streak", 0)),
-            "salvation_cooldown": int(getattr(self, "salvation_cooldown", 0)),
+            "z": list(self.z),
+            "z_disp_streak": int(self._z_disp_streak),
+            "z_baseline": list(self._z_baseline),
+            "crisis_streak": int(self.crisis_streak),
+            "salvation_cooldown": int(self.salvation_cooldown),
             "surv_stats": {k: dict(v) for k, v in self._surv_stats.items()},
-            "sit_events": [[t, old.value, new.value] for t, old, new in self.sit_events],
+            # sit_events now stores (t, reason_str) pairs
+            "sit_events": [[t, reason] for t, reason in self.sit_events],
             "rng_state": _rng_state_to_str(self.rng),
         }
 
     def load_full_state(self, snap: Dict[str, Any]) -> None:
         self.t = int(snap["t"])
 
-        # profile (traits)
         p = snap["profile"]
         self.profile.name = p["name"]
         self.profile.activity = int(p["activity"])
@@ -940,7 +1122,6 @@ class CATLMAgent:
         self.profile.appetite = int(p["appetite"])
         self.profile.cowardice = int(p["cowardice"])
 
-        # state vector
         for k, v in snap["state"].items():
             self.state.values[State(k)] = int(v)
 
@@ -948,16 +1129,29 @@ class CATLMAgent:
         self.capacity = float(snap["capacity"])
         self.mode = Mode(snap["mode"])
         self.mode_persist = int(snap.get("mode_persist", 0))
-        self.z = (float(snap["z"][0]), float(snap["z"][1]))
-
+        self.z = tuple(float(v) for v in snap["z"])
+        self._z_disp_streak = int(snap.get("z_disp_streak", 0))
+        self._z_baseline = tuple(float(v) for v in snap.get("z_baseline", [0.5]*5))
         self.crisis_streak = int(snap.get("crisis_streak", 0))
         self.salvation_cooldown = int(snap.get("salvation_cooldown", 0))
+
         raw = snap.get("surv_stats", self._surv_stats)
         self._surv_stats = {k: dict(v) for k, v in raw.items()}
-        self.sit_events = [(int(t), Mode(old), Mode(new)) for t, old, new in snap.get("sit_events", [])]
+
+        # Handle both old format (t, old_mode, new_mode) and new format (t, reason)
+        loaded_events = snap.get("sit_events", [])
+        if loaded_events and len(loaded_events[0]) == 3:
+            # legacy v1 format
+            self.sit_events = [(int(e[0]), f"legacy:{e[1]}->{e[2]}") for e in loaded_events]
+        else:
+            self.sit_events = [(int(e[0]), str(e[1])) for e in loaded_events]
 
         _rng_state_from_str(self.rng, snap["rng_state"])
 
+
+# ---------------------------------------------------------------------------
+# RNG helpers (unchanged)
+# ---------------------------------------------------------------------------
 
 def _rng_state_to_str(rng: random.Random) -> str:
     version, internalstate, gauss_next = rng.getstate()
@@ -969,33 +1163,31 @@ def _rng_state_from_str(rng: random.Random, s: str) -> None:
     rng.setstate((d["version"], tuple(d["internalstate"]), d["gauss_next"]))
 
 
-def run_demo(seed: int = 42) -> List[Tuple[str, float, str, str, float, float, str, int, float, int]]:
+# ---------------------------------------------------------------------------
+# Demo
+# ---------------------------------------------------------------------------
+
+def run_demo(seed: int = 42) -> List[Dict[str, Any]]:
     cat = CATLMAgent(
         profile=CatProfile(name="Nabi", activity=4, sociability=5, appetite=3, cowardice=4),
         rng_seed=seed,
     )
 
     logs = []
-    # run multiple ticks; the agent will pick actions internally now
     for _ in range(12):
-        cat.tick(hours=1)
-        logs.append((
-            cat.mode.value,
-            round(cat.crisis_score(), 3),
-            cat.crisis_stage(),
-            cat.dialogue(),
-            round(cat.capacity, 3),
-            round(cat.care_alpha, 3),
-            f"z={tuple(round(v, 3) for v in cat.z)}",
-            len(cat._available_actions()),
-            round(cat.crisis_threshold(), 3),
-            len(cat.sit_events),
-        ))
+        r = cat.step(user_action=None)
+        logs.append(r)
     return logs
 
 
 if __name__ == "__main__":
-    output = run_demo()
-    print("mode\tCt\tstage\tdialogue\tcap\talpha\tz\t|A|\ttheta\tSIT#")
-    for row in output:
-        print(f"{row[0]}\t{row[1]}\t{row[2]}\t{row[3]}\t{row[4]}\t{row[5]}\t{row[6]}\t{row[7]}\t{row[8]}\t{row[9]}")
+    rows = run_demo()
+    header = f"{'t':>3}  {'mode':<8}  {'Ct(fwd)':>8}  {'Ct(now)':>8}  {'stage':>6}  {'action':<8}  {'cap':>6}  {'alpha':>7}  {'z_str':>5}  {'SIT#':>4}"
+    print(header)
+    print("-" * len(header))
+    for r in rows:
+        print(
+            f"{r['t']:>3}  {r['mode']:<8}  {r['Ct']:>8.3f}  {r['Ct_instant']:>8.3f}"
+            f"  {r['stage']:>6}  {r['action']:<8}  {r['capacity']:>6.3f}"
+            f"  {r['alpha']:>7.4f}  {r['z_disp_streak']:>5}  {r['sit_count']:>4}"
+        )
