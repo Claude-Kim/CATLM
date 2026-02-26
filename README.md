@@ -27,4 +27,4 @@ python3 catlm_simulator.py
 - 붕괴 단계 회복 조건(BM 아이템)을 실제 게임 경제 시스템과 연동
 
 ## 관련 논문
-[text](https://zenodo.org/records/18780274)
+[Link] (https://zenodo.org/records/18780274) Structural Inference Transitions Under Irreversible Survival Constraints
