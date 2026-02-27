@@ -18,6 +18,7 @@ Generated figures (PNG + PDF):
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 import os
 import sys
@@ -32,7 +33,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import catlm_simulator as _sim_module
-from catlm_simulator import CATLMAgent, CatProfile, Action
+from catlm_simulator import CATLMAgent, CatProfile, Action, TRAIT_MULTIPLIER
 from sit_core import SITCore, SITConfig
 
 
@@ -569,6 +570,192 @@ def figure_z_simplex(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Seed-sweep experiment: Irreversible vs Ablated (H1 effect-size analysis)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _bootstrap_ci(
+    deltas: np.ndarray,
+    n_boot: int = 2000,
+    alpha: float = 0.05,
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[float, float, float]:
+    """
+    Percentile bootstrap 95% CI for the mean of paired differences.
+    Returns (mean, ci_low, ci_high).
+    """
+    if rng is None:
+        rng = np.random.default_rng(0)
+    n = len(deltas)
+    boot_means = np.empty(n_boot)
+    for i in range(n_boot):
+        boot_means[i] = rng.choice(deltas, size=n, replace=True).mean()
+    ci_lo = float(np.percentile(boot_means, 100 * alpha / 2))
+    ci_hi = float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
+    return float(deltas.mean()), ci_lo, ci_hi
+
+
+def _per_run_metrics(logs: List[Dict[str, Any]], n_ticks: int) -> Dict[str, float]:
+    """Extract scalar summary metrics from a single simulation run."""
+    cts    = np.array([r["Ct"]    for r in logs])
+    alphas = np.array([r["alpha"] for r in logs])
+    modes  = [r["mode"] for r in logs]
+
+    normal_ticks = sum(1 for m in modes if m == "normal")
+
+    q = max(1, n_ticks // 4)
+    alpha_slope = float(alphas[-q:].mean() - alphas[:q].mean())
+
+    return {
+        "sit_count":    float(logs[-1]["sit_count"]),
+        "mean_Ct":      float(cts.mean()),
+        "normal_ticks": float(normal_ticks),
+        "alpha_final":  float(alphas[-1]),
+        "alpha_slope":  alpha_slope,
+    }
+
+
+def run_paired_experiment(
+    profile: CatProfile,
+    n_seeds: int = 200,
+    n_ticks: int = 120,
+    sit_config: Optional[SITConfig] = None,
+    user_actions: Optional[List[Optional[Action]]] = None,
+    n_boot: int = 2000,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """
+    Paired seed sweep comparing Irreversible vs Ablated conditions.
+
+    For each seed s in range(n_seeds):
+      1. Run Irreversible (paper default capacity decay).
+      2. Run Ablated      (CAPACITY_DECAY_ON_CRISIS = CAPACITY_DECAY_ON_OVERLOAD = 0).
+      Both runs share the same seed → paired design.
+
+    Metrics collected per run:
+      sit_count    — total SIT events fired
+      mean_Ct      — mean collapse forecast intensity
+      normal_ticks — ticks spent in NORMAL mode  (survival proxy)
+      alpha_final  — care_alpha at last tick
+      alpha_slope  — mean(α, last-quarter) − mean(α, first-quarter)
+
+    Returns dict with:
+      per_seed  — list of per-seed dicts (irrev_*, ablated_*, delta_*)
+      summary   — per-metric {delta_mean, ci_lo, ci_hi, ci_zero_excluded}
+    """
+    if verbose:
+        print(f"  Paired experiment: n_seeds={n_seeds}, n_ticks={n_ticks}")
+
+    metric_keys = ["sit_count", "mean_Ct", "normal_ticks", "alpha_final", "alpha_slope"]
+    records: List[Dict[str, Any]] = []
+
+    for seed in range(n_seeds):
+        if verbose and seed % 50 == 0:
+            print(f"    seed {seed}/{n_seeds} …")
+
+        logs_i = run_simulation(profile, n_ticks=n_ticks, seed=seed,
+                                user_actions=user_actions, sit_config=sit_config)
+        logs_a = run_simulation_ablated(profile, n_ticks=n_ticks, seed=seed,
+                                        user_actions=user_actions,
+                                        sit_config=sit_config)
+
+        mi = _per_run_metrics(logs_i, n_ticks)
+        ma = _per_run_metrics(logs_a, n_ticks)
+
+        row: Dict[str, Any] = {"seed": seed}
+        for k in metric_keys:
+            row[f"irrev_{k}"]   = mi[k]
+            row[f"ablated_{k}"] = ma[k]
+            row[f"delta_{k}"]   = mi[k] - ma[k]
+        records.append(row)
+
+    rng_boot = np.random.default_rng(0)
+    summary: Dict[str, Dict[str, Any]] = {}
+    for k in metric_keys:
+        deltas = np.array([r[f"delta_{k}"] for r in records])
+        mean, lo, hi = _bootstrap_ci(deltas, n_boot=n_boot, rng=rng_boot)
+        summary[k] = {
+            "delta_mean":       mean,
+            "ci_lo":            lo,
+            "ci_hi":            hi,
+            "ci_zero_excluded": not (lo <= 0.0 <= hi),
+        }
+
+    if verbose:
+        print(f"\n  ── Δ(Irreversible − Ablated), 95% Bootstrap CI  (n={n_seeds} seeds) ──")
+        for k, v in summary.items():
+            flag = "  *** CI excludes 0" if v["ci_zero_excluded"] else ""
+            print(f"    Δ{k:<15}  {v['delta_mean']:+.4f}  "
+                  f"95%CI [{v['ci_lo']:+.4f}, {v['ci_hi']:+.4f}]{flag}")
+
+    return {"per_seed": records, "summary": summary}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figure 6 — Seed-robustness: Δ distribution histograms + CI
+# ─────────────────────────────────────────────────────────────────────────────
+
+def figure_seed_robustness(
+    experiment_result: Dict[str, Any],
+    title: str = "H1 Effect-Size: Irreversible − Ablated  (Paired Seed Sweep)",
+) -> plt.Figure:
+    """
+    One panel per metric. Each panel shows:
+      - histogram of per-seed Δ = (Irreversible − Ablated)
+      - vertical line at mean
+      - shaded 95% bootstrap CI band
+      - red dashed zero reference
+    """
+    records = experiment_result["per_seed"]
+    summary = experiment_result["summary"]
+    n       = len(records)
+
+    # (metric_key, x-axis label, panel title)
+    panels = [
+        ("sit_count",    "Δ SIT events",          "ΔSIT count"),
+        ("normal_ticks", "Δ ticks in NORMAL mode", "ΔSurvival time (normal ticks)"),
+        ("alpha_final",  "Δ α_t at t=T",          "Δα_t final"),
+        ("mean_Ct",      "Δ mean C_t",             "ΔMean collapse forecast"),
+        ("alpha_slope",  "Δ α slope (Q4−Q1)",      "Δα growth slope"),
+    ]
+
+    fig, axes = plt.subplots(1, len(panels), figsize=(4.2 * len(panels), 5.2))
+    fig.suptitle(f"{title}  (n={n} seeds)", fontsize=11, y=1.02)
+
+    C_irrev   = "#1565C0"
+    C_zero    = "#E53935"
+    C_ci_fill = "#BBDEFB"
+
+    for ax, (k, xlabel, panel_title) in zip(axes, panels):
+        deltas = np.array([r[f"delta_{k}"] for r in records])
+        s      = summary[k]
+
+        ax.hist(deltas, bins=35, color="#90A4AE", edgecolor="white",
+                linewidth=0.5, alpha=0.85, density=True)
+
+        # 95% CI band
+        ax.axvspan(s["ci_lo"], s["ci_hi"], color=C_ci_fill, alpha=0.55,
+                   label=f"95% CI [{s['ci_lo']:+.3f}, {s['ci_hi']:+.3f}]")
+
+        # mean
+        ax.axvline(s["delta_mean"], color=C_irrev, linewidth=2.0,
+                   label=f"mean = {s['delta_mean']:+.3f}")
+
+        # zero reference
+        ax.axvline(0.0, color=C_zero, linewidth=1.3, linestyle="--",
+                   alpha=0.75, label="zero (null)")
+
+        star = "\n★ CI excludes 0" if s["ci_zero_excluded"] else ""
+        title_color = C_irrev if s["ci_zero_excluded"] else "black"
+        ax.set_title(f"{panel_title}{star}", fontsize=9, color=title_color)
+        ax.set_xlabel(xlabel, fontsize=8)
+        ax.set_ylabel("Density" if k == "sit_count" else "", fontsize=8)
+        ax.legend(fontsize=7, loc="upper right", framealpha=0.8)
+
+    fig.tight_layout()
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CLI entrypoint
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -590,6 +777,36 @@ def main() -> None:
                              "Lower values produce more frequent SIT events.")
     parser.add_argument("--no-pdf", action="store_true",
                         help="Skip PDF output (PNG only)")
+
+    # ── Seed-sweep experiment (H1 effect-size analysis) ─────────────────────
+    parser.add_argument("--experiment", action="store_true",
+                        help="Run large-scale paired seed sweep "
+                             "(Irreversible vs Ablated) and save fig6 + CSV.")
+    parser.add_argument("--experiment-seeds", type=int, default=200,
+                        metavar="N",
+                        help="Number of seeds in the sweep (default: 200; "
+                             "recommend 500 for publication).")
+    parser.add_argument("--experiment-n-boot", type=int, default=2000,
+                        metavar="N",
+                        help="Bootstrap resamples for CI (default: 2000).")
+    parser.add_argument("--experiment-eps", type=float, default=0.25,
+                        metavar="EPS",
+                        help="SIT eps used in the sweep (default: 0.25 = "
+                             "game default; keep paper-consistent).")
+    parser.add_argument("--experiment-cowardice", type=int, default=5,
+                        choices=[1, 2, 3, 4, 5], metavar="N",
+                        help="Cowardice trait for sweep profile (default: 5; "
+                             "lowers θ → easier crisis entry, shows H1 effect).")
+    parser.add_argument("--experiment-sociability", type=int, default=5,
+                        choices=[1, 2, 3, 4, 5], metavar="N",
+                        help="Sociability trait for sweep profile (default: 5; "
+                             "raises loneliness weight in Ct).")
+    parser.add_argument("--experiment-neglect", type=int, default=40,
+                        metavar="TICKS",
+                        help="Forced IDLE ticks at start of each sweep run "
+                             "(default: 40 = ticks//3 of 120; creates crisis "
+                             "conditions where capacity decay fires).")
+
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
@@ -679,6 +896,91 @@ def main() -> None:
     # ── Fig 5 ───────────────────────────────────────────────────────────────
     print("[5/5] Figure 5: z_t simplex …")
     _save(figure_z_simplex(logs), "fig5_z_simplex")
+
+    # ── Seed-sweep experiment (optional) ────────────────────────────────────
+    if args.experiment:
+        n_sw = args.experiment_seeds
+        n_bt = args.experiment_n_boot
+        sw_eps = args.experiment_eps
+
+        sweep_sit_cfg = SITConfig(
+            lam=0.25,
+            eps=sw_eps,
+            k_persist=3,
+            require_collapse_regime=True,   # paper default
+            insight_phi=0.7,
+            insight_k_persist=3,
+        )
+
+        print(f"\n[6/6] Seed-sweep experiment  "
+              f"(n_seeds={n_sw}, n_ticks={args.ticks}, eps={sw_eps}, "
+              f"n_boot={n_bt}) …")
+
+        # Sweep profile — high cowardice/sociability so crisis fires stochastically
+        sweep_profile = CatProfile(
+            name="Cat",
+            activity=3,
+            sociability=args.experiment_sociability,
+            appetite=3,
+            cowardice=args.experiment_cowardice,
+        )
+
+        # Neglect scenario: forced IDLE for first N ticks → auto-care thereafter
+        neglect_n = max(0, args.experiment_neglect)
+        sweep_actions: List[Optional[Action]] = (
+            [Action.IDLE] * neglect_n
+            + [None] * max(0, args.ticks - neglect_n)
+        )
+        print(f"      Profile: sociability={args.experiment_sociability}, "
+              f"cowardice={args.experiment_cowardice}  "
+              f"(θ ≈ {0.5 - (TRAIT_MULTIPLIER[args.experiment_cowardice]-1.0)*0.15:.3f})")
+        print(f"      Scenario: {neglect_n} ticks IDLE → "
+              f"{args.ticks - neglect_n} ticks auto-policy")
+
+        result = run_paired_experiment(
+            profile=sweep_profile,
+            n_seeds=n_sw,
+            n_ticks=args.ticks,
+            sit_config=sweep_sit_cfg,
+            user_actions=sweep_actions,
+            n_boot=n_bt,
+            verbose=True,
+        )
+
+        # Figure 6
+        fig6 = figure_seed_robustness(result)
+        _save(fig6, "fig6_seed_robustness")
+
+        # CSV export (per-seed raw data)
+        csv_path = os.path.join(args.output, "experiment_per_seed.csv")
+        if result["per_seed"]:
+            fieldnames = list(result["per_seed"][0].keys())
+            with open(csv_path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(result["per_seed"])
+            print(f"      → {csv_path}")
+
+        # Summary text report
+        report_path = os.path.join(args.output, "experiment_summary.txt")
+        with open(report_path, "w", encoding="utf-8") as fh:
+            fh.write(
+                f"CATLM Seed-Sweep Experiment Summary\n"
+                f"====================================\n"
+                f"Profile:  activity=3, sociability=3, appetite=3, cowardice=3\n"
+                f"n_seeds:  {n_sw}\n"
+                f"n_ticks:  {args.ticks}\n"
+                f"SIT eps:  {sw_eps}  (require_collapse_regime=True)\n"
+                f"n_boot:   {n_bt}\n\n"
+                f"Δ = Irreversible − Ablated  (paired design, 95% percentile bootstrap CI)\n\n"
+            )
+            for k, v in result["summary"].items():
+                flag = "  *** CI EXCLUDES 0" if v["ci_zero_excluded"] else ""
+                fh.write(
+                    f"  Δ{k:<15}  mean={v['delta_mean']:+.4f}  "
+                    f"CI=[{v['ci_lo']:+.4f}, {v['ci_hi']:+.4f}]{flag}\n"
+                )
+        print(f"      → {report_path}")
 
     print(f"\nAll figures saved to ./{args.output}/")
 

@@ -2,7 +2,23 @@
   "permissions": {
     "allow": [
       "Bash(python3 -c \":*)",
-      "Bash(python3 src/paper_figures.py --help)"
+      "Bash(python3 src/paper_figures.py --help)",
+      "Bash(python3 src/paper_figures.py --experiment --experiment-seeds 5 --experiment-n-boot 100 --ticks 120 --no-pdf --output /tmp/catlm_test)",
+      "Bash(python3 src/paper_figures.py --experiment --experiment-seeds 8 --experiment-n-boot 200 --ticks 120 --no-pdf --output /tmp/catlm_test2)",
+      "Read(//tmp/catlm_test2/**)",
+      "Bash(python3 src/paper_figures.py --experiment --experiment-seeds 30 --experiment-n-boot 500 --ticks 120 --no-pdf --output figures)",
+      "Bash(python3 src/exp_002_robustness_grid.py --seeds 3 --output results/exp-002-test)",
+      "Bash(python3 -:*)",
+      "Bash(python3 src/exp_002_robustness_grid.py --seeds 5 --output results/exp-002-test)",
+      "Bash(python3 src/exp_002_robustness_grid.py --seeds 100 --output results/exp-002)",
+      "Bash(python3 src/exp_003_null_fpr.py --seeds 200)",
+      "Bash(python3 -c \"import sys,csv; r=csv.DictReader\\(sys.stdin\\); rows=list\\(r\\); print\\(rows[0].keys\\(\\)\\); print\\(rows[0]\\)\")",
+      "Bash(python3 -c \"from scipy import stats; print\\(''scipy OK''\\)\")",
+      "Bash(pip3 install scipy -q)",
+      "Bash(pip3 install scipy --break-system-packages -q)"
+    ],
+    "additionalDirectories": [
+      "/home/claude/CATLM"
     ]
   }
 }
