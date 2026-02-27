@@ -1,3 +1,5 @@
+# CATLM Simulator v2.0
+
 from __future__ import annotations
 
 import json
@@ -6,6 +8,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 import random
 from typing import Any, Dict, List, Optional, Tuple
+
+from sit_core import SITCore, SITConfig
 
 
 class Trait(str, Enum):
@@ -71,24 +75,9 @@ ATTACHMENT_GAIN = 0.015
 # ---------------------------------------------------------------------------
 # SIT detection settings
 # ---------------------------------------------------------------------------
-# [REFACTORED v2]
-# z_t is now R^5, not R^2. SIT is detected from sustained z-shift magnitude,
-# independent of mode-transition. SIT_EPS recalibrated for R^5 space.
-#
-# z components:
-#   [0] explore_drive   : curiosity + excitement blend
-#   [1] care_drive      : care_alpha + (1 - Ct) blend
-#   [2] survival_pressure : Ct itself (forward-facing)
-#   [3] social_need     : loneliness + depression blend
-#   [4] capacity_state  : remaining capacity
-#
-# In R^2: max_dist = sqrt(2) ≈ 1.41, old eps = 0.35 → 24.8% of max
-# In R^5: max_dist = sqrt(5) ≈ 2.24, new eps = 0.55 → 24.6% of max (preserved ratio)
-#
-Z_DIM = 5
-SIT_EPS = 0.55            # recalibrated for R^5 (was 0.35 for R^2)
-SIT_Z_STREAK_K = 3        # consecutive ticks with dz > SIT_EPS required
-SIT_REQUIRE_COLLAPSE_REGIME = True  # only count SIT near/inside collapse regime
+# SIT detection is now handled by SITCore (sit_core.py).
+# z_t is R^3 (SAFE, GREEDY, REPAIR) with EMA resistance (λ=0.25).
+# Configuration lives in SITConfig — see CATLMAgent.__init__ for defaults.
 
 # ---------------------------------------------------------------------------
 # Collapse forecast settings
@@ -552,20 +541,19 @@ class CATLMAgent:
         self.sit_flag: int = 0
         self.sit_reason: str = ""
 
-        # [REFACTORED] z_t is now R^5 (was R^2)
-        # components: [explore_drive, care_drive, survival_pressure, social_need, capacity_state]
-        self.z: Tuple[float, ...] = (0.5, 0.5, 0.5, 0.5, 1.0)
+        # z_t is R^3 (SAFE, GREEDY, REPAIR) — managed by SITCore
+        self.z: Tuple[float, float, float] = (1 / 3, 1 / 3, 1 / 3)
+        self.insight_now: bool = False
+        self.insight_attained: bool = False
 
-        # [REFACTORED] z-shift persistence tracker (baseline displacement method).
-        #
-        # _z_baseline: reference z captured at initialization or after each SIT.
-        # _z_disp_streak: consecutive ticks where ||z - _z_baseline|| > SIT_EPS.
-        #
-        # SIT triggers when z has STAYED displaced from its prior attractor for
-        # SIT_Z_STREAK_K consecutive ticks — matching the paper's "persists for
-        # k timesteps" semantics. After each SIT, baseline resets to current z.
-        self._z_baseline: Tuple[float, ...] = (0.5, 0.5, 0.5, 0.5, 1.0)
-        self._z_disp_streak: int = 0
+        self.sit = SITCore(SITConfig(
+            lam=0.25,
+            insight_phi=0.7,
+            insight_k_persist=3,
+            eps=0.25,
+            k_persist=3,
+            require_collapse_regime=True,
+        ))
 
         self.t = 0
         self.crisis_streak = 0
@@ -664,102 +652,24 @@ class CATLMAgent:
         return "붕괴"
 
     # -----------------------------------------------------------------------
-    # z_t computation — REFACTORED to R^5
+    # SIT observation features
     # -----------------------------------------------------------------------
 
-    def _compute_z(self, Ct: float) -> Tuple[float, ...]:
+    def _sit_obs_features(self) -> Dict[str, float]:
         """
-        [REFACTORED v2] Latent inference config proxy z_t in R^5.
-
-        Dimensions:
-          [0] explore_drive    : weighted blend of curiosity & excitement
-          [1] care_drive       : care_alpha + (1 - Ct) blend
-          [2] survival_pressure: Ct (forward-facing, same as crisis_score())
-          [3] social_need      : loneliness + depression blend
-          [4] capacity_state   : remaining irreversible capacity
-
-        Rationale: captures distinct inference postures — exploration vs.
-        survival, affiliative vs. threat-vigilant, degradation state —
-        allowing SIT detection to distinguish qualitatively different
-        reorganization events rather than conflating all transitions.
+        Provide normalized obs features for SITCore gating.
+        Capacity is intentionally excluded from gating logits to avoid
+        circular SIT inflation — it only restricts feasible actions elsewhere.
         """
         s = self.state.values
-        explore_drive = (
-            0.6 * (s[State.CURIOSITY] / 255) + 0.4 * (s[State.EXCITEMENT] / 255)
-        )
-        care_drive = 0.5 * self.care_alpha + 0.5 * (1.0 - Ct)
-        survival_pressure = Ct
-        social_need = (
-            0.5 * (s[State.LONELINESS] / 255) + 0.5 * (s[State.DEPRESSION] / 255)
-        )
-        capacity_state = self.capacity
-
-        return tuple(
-            min(1.0, max(0.0, v))
-            for v in (explore_drive, care_drive, survival_pressure, social_need, capacity_state)
-        )
-
-    # -----------------------------------------------------------------------
-    # SIT detection — REFACTORED: z-streak independent of mode transition
-    # -----------------------------------------------------------------------
-
-    def _detect_sit(
-        self,
-        z_new: Tuple[float, ...],
-        Ct: float,
-    ) -> Tuple[int, str]:
-        """
-        [REFACTORED v2] Structural Inference Transition detection.
-        Uses baseline displacement persistence (not repeated large dz).
-
-        Logic:
-          d_base = ||z_new - _z_baseline||   (displacement from prior attractor)
-
-          - If d_base > SIT_EPS: increment _z_disp_streak (z is staying displaced)
-          - Else: reset _z_disp_streak AND update _z_baseline (z returned to attractor)
-
-          SIT fires when _z_disp_streak >= SIT_Z_STREAK_K, meaning z has maintained
-          a large displacement from its last stable configuration for k ticks.
-          After firing, _z_baseline resets to z_new (new attractor accepted).
-
-        Why baseline displacement > repeated large dz:
-          After an abrupt shift, z typically settles into a new attractor. The
-          repeated-dz approach would miss the SIT because subsequent ticks have
-          small dz even though z is structurally reorganized. Baseline displacement
-          correctly captures "z moved AND stayed there."
-
-        Optional: SIT only counts inside collapse regime (SIT_REQUIRE_COLLAPSE_REGIME).
-        Mode-transition is NOT a required condition.
-        """
-        d_base = sum((a - b) ** 2 for a, b in zip(z_new, self._z_baseline)) ** 0.5
-        theta = self.crisis_threshold()
-        in_collapse = Ct >= theta
-
-        if d_base > SIT_EPS:
-            self._z_disp_streak += 1
-        else:
-            self._z_disp_streak = 0
-            self._z_baseline = z_new   # returned to attractor: update reference
-
-        sit_ok = self._z_disp_streak >= SIT_Z_STREAK_K
-
-        if SIT_REQUIRE_COLLAPSE_REGIME:
-            sit_ok = sit_ok and in_collapse
-
-        if not sit_ok:
-            return 0, ""
-
-        # SIT confirmed: reset baseline to new attractor
-        reason = (
-            f"d_base={d_base:.3f}>(eps={SIT_EPS}), "
-            f"z_disp_streak={self._z_disp_streak}>=(k={SIT_Z_STREAK_K}), "
-            f"z_baseline={tuple(round(v,3) for v in self._z_baseline)}, "
-            f"Ct={Ct:.3f}, theta={theta:.3f}, "
-            f"collapse_regime={in_collapse}"
-        )
-        self._z_baseline = z_new
-        self._z_disp_streak = 0
-        return 1, reason
+        return {
+            "hunger":     max(0.0, min(1.0, s[State.HUNGER] / 255.0)),
+            "curiosity":  max(0.0, min(1.0, s[State.CURIOSITY] / 255.0)),
+            "fatigue":    max(0.0, min(1.0, s[State.FATIGUE] / 255.0)),
+            "anxiety":    max(0.0, min(1.0, s[State.ANXIETY] / 255.0)),
+            "health_bad": max(0.0, min(1.0, (255.0 - s[State.HEALTH]) / 255.0)),
+            "skin_bad":   max(0.0, min(1.0, (255.0 - s[State.SKIN]) / 255.0)),
+        }
 
     # -----------------------------------------------------------------------
     # Action feasibility
@@ -996,15 +906,18 @@ class CATLMAgent:
             self.care_alpha + eta_alpha * E_t * S_t + kappa_alpha * A_t
         ))
 
-        # 12. [REFACTORED] z_t update: R^5 via _compute_z()
-        z_new = self._compute_z(Ct)
+        # 12–13. z_t (R^3 MoE) + SIT detection via SITCore
+        obs = self._sit_obs_features()
+        sit_out = self.sit.step(obs=obs, Ct=Ct, theta=theta)
 
-        # 13. [REFACTORED] SIT detection: z-streak based, mode-transition independent
-        self.sit_flag, self.sit_reason = self._detect_sit(z_new, Ct)
+        self.z = sit_out.z
+        self.sit_flag = 1 if sit_out.sit_event else 0
+        self.sit_reason = sit_out.sit_reason
+        self.insight_now = sit_out.insight_now
+        self.insight_attained = sit_out.insight_attained
+
         if self.sit_flag:
             self.sit_events.append((self.t, self.sit_reason))
-
-        self.z = z_new
 
         return {
             "t": self.t,
@@ -1022,8 +935,15 @@ class CATLMAgent:
             "alpha": round(self.care_alpha, 4),
             "capacity": round(self.capacity, 4),
             "crisis_streak": self.crisis_streak,
-            "z": tuple(round(v, 4) for v in z_new),
-            "z_disp_streak": self._z_disp_streak,
+            "z_pref": tuple(round(v, 4) for v in sit_out.z_pref),
+            "z": tuple(round(v, 4) for v in sit_out.z),
+            "safe_w": round(sit_out.safe_weight, 4),
+            "insight_now": bool(sit_out.insight_now),
+            "insight_attained": bool(sit_out.insight_attained),
+            "insight_streak": int(sit_out.insight_streak),
+            "sit_d_base": round(sit_out.d_base, 4),
+            "sit_disp_streak": int(sit_out.disp_streak),
+            "sit_event": bool(sit_out.sit_event),
             "sit_count": len(self.sit_events),
             "sit_flag": self.sit_flag,
         }
@@ -1102,8 +1022,7 @@ class CATLMAgent:
             "mode": self.mode.value,
             "mode_persist": int(self.mode_persist),
             "z": list(self.z),
-            "z_disp_streak": int(self._z_disp_streak),
-            "z_baseline": list(self._z_baseline),
+            "sit_state": self.sit.dump_state(),
             "crisis_streak": int(self.crisis_streak),
             "salvation_cooldown": int(self.salvation_cooldown),
             "surv_stats": {k: dict(v) for k, v in self._surv_stats.items()},
@@ -1129,9 +1048,13 @@ class CATLMAgent:
         self.capacity = float(snap["capacity"])
         self.mode = Mode(snap["mode"])
         self.mode_persist = int(snap.get("mode_persist", 0))
-        self.z = tuple(float(v) for v in snap["z"])
-        self._z_disp_streak = int(snap.get("z_disp_streak", 0))
-        self._z_baseline = tuple(float(v) for v in snap.get("z_baseline", [0.5]*5))
+        raw_z = snap["z"]
+        self.z = tuple(float(v) for v in raw_z)
+        if "sit_state" in snap:
+            self.sit.load_state(snap["sit_state"])
+        else:
+            # Legacy snapshot: no sit_state — reset SITCore to a safe default
+            self.sit.reset()
         self.crisis_streak = int(snap.get("crisis_streak", 0))
         self.salvation_cooldown = int(snap.get("salvation_cooldown", 0))
 
@@ -1182,12 +1105,12 @@ def run_demo(seed: int = 42) -> List[Dict[str, Any]]:
 
 if __name__ == "__main__":
     rows = run_demo()
-    header = f"{'t':>3}  {'mode':<8}  {'Ct(fwd)':>8}  {'Ct(now)':>8}  {'stage':>6}  {'action':<8}  {'cap':>6}  {'alpha':>7}  {'z_str':>5}  {'SIT#':>4}"
+    header = f"{'t':>3}  {'mode':<8}  {'Ct(fwd)':>8}  {'Ct(now)':>8}  {'stage':>6}  {'action':<8}  {'cap':>6}  {'alpha':>7}  {'safe_w':>6}  {'dstr':>4}  {'SIT#':>4}"
     print(header)
     print("-" * len(header))
     for r in rows:
         print(
             f"{r['t']:>3}  {r['mode']:<8}  {r['Ct']:>8.3f}  {r['Ct_instant']:>8.3f}"
             f"  {r['stage']:>6}  {r['action']:<8}  {r['capacity']:>6.3f}"
-            f"  {r['alpha']:>7.4f}  {r['z_disp_streak']:>5}  {r['sit_count']:>4}"
+            f"  {r['alpha']:>7.4f}  {r['safe_w']:>6.3f}  {r['sit_disp_streak']:>4}  {r['sit_count']:>4}"
         )

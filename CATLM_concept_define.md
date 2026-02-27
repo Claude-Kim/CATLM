@@ -2,7 +2,7 @@
 
 > **Cat Adaptive Tiny Language Model**
 > SNAX Cats On-Device AI Character Adaptation System
-> v1.0 | 2026
+> v2.0 | 2026
 
 ---
 
@@ -296,14 +296,38 @@ The core concepts of the paper have been applied in lightweight form, adapted to
 
 | Paper Concept | CATLM Application |
 |---------|-----------|
-| Collapse forecast intensity Ct | Collapse forecast gauge |
-| Irreversible functional loss (ΔW_irrev) | Illness, depression, skin disease |
-| Collapse threshold θ | Condition for entering the Collapse stage |
-| Origin dependency weight αt | Cumulative player care pattern structure |
+| Collapse forecast intensity Ct | Forward-looking collapse forecast gauge (idle-drift projection, H=3 ticks) |
+| Irreversible functional loss (ΔW_irrev) | Capacity decay: permanently shrinks the feasible action set |
+| Collapse threshold θ | Condition for entering the Collapse stage; linked to cowardice trait |
+| Origin dependency weight αt | Cumulative player care pattern (care_alpha) |
+| Latent inference configuration z_t | R^3 strategy-selection state: SAFE / GREEDY / REPAIR (MoE gating weights) |
+| Structural Inference Transition (SIT) | Persistent displacement of z_t from its prior attractor, detected inside collapse regime |
+| Resistance / hysteresis | EMA smoothing on z_t (λ=0.25); prevents transient spikes from triggering false SIT |
+| Insight | SAFE expert dominance (z[0] ≥ 0.7) persisting for k consecutive ticks |
+
+### z_t — Strategy-Selection State (v2)
+
+In v2, the latent inference configuration z_t is modeled as a **Mixture-of-Experts gating vector** over three behavioral strategies:
+
+| Expert | Description | Dominant when |
+|--------|-------------|---------------|
+| SAFE | Minimize collapse risk; prioritize survival actions | Ct high, anxiety/health threat high |
+| GREEDY | Pursue curiosity and reward; exploration posture | Ct low, hunger/curiosity high |
+| REPAIR | Restore degraded states (health, skin) | health_bad or skin_bad high |
+
+z_t is updated each tick via EMA: `z_t ← (1−λ)·z_{t−1} + λ·z̃_t`, where z̃_t is the instantaneous softmax preference computed from current state features. This resistance prevents z_t from snapping abruptly between strategies, matching the paper's hysteresis requirement.
+
+### SIT Detection
+
+A **Structural Inference Transition** fires when:
+1. `||z_t − z_baseline|| > ε` for at least `k` consecutive ticks (z has moved and stayed away from its prior attractor), **and**
+2. Ct ≥ θ at the time of detection (collapse-regime gating, default enabled)
+
+After each SIT, `z_baseline` resets to `z_t` (new attractor accepted). Each event is logged as `(t, reason_str)` in `sit_events`.
 
 ---
 
-*CATLM Concept Definition Document v1.0 — SNAX Cats*
+*CATLM Concept Definition Document v2.0 — SNAX Cats*
 
 (Related documents)
-- [[Part I __ Structural Inference Transitions Under Irreversible Survival Constraints]]
+- [Structural Inference Transitions Under Irreversible Survival Constraints](https://zenodo.org/records/18780274)
