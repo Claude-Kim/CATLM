@@ -86,7 +86,8 @@ ATTACHMENT_GAIN = 0.015
 # Ct is now the FORECAST crisis score (idle-drift projection over H ticks),
 # not an instantaneous snapshot. This aligns with paper Eq: Ct = 1 - Psurv(t+H).
 #
-FORECAST_HORIZON: int = 3   # H: lookahead ticks for Ct estimation
+FORECAST_H_MIN: int = 1
+FORECAST_H_MAX: int = 12   # Lt = max(Lmin, floor(Lmax * Wt)); paper: Lt = f(Wt)
 
 # ---------------------------------------------------------------------------
 # Game-stability knobs
@@ -552,6 +553,7 @@ class CATLMAgent:
             insight_k_persist=3,
             eps=0.25,
             k_persist=3,
+            k_stable=15,
             require_collapse_regime=True,
         ))
 
@@ -566,6 +568,23 @@ class CATLMAgent:
     # -----------------------------------------------------------------------
     # Crisis scoring — REFACTORED
     # -----------------------------------------------------------------------
+
+    def forecast_horizon(self) -> int:
+        """
+        Capacity-inverse horizon: Lt = max(Lmin, floor(Lmax * (1 − Wt)))
+
+        Rationale (H1 alignment):
+          - Low capacity (irrev) → fewer recovery options → the agent must look
+            further ahead to appreciate how bad the situation is → H increases → Ct↑
+          - High capacity (ablated, Wt≈1) → ample recovery options → short horizon
+            suffices → H≈Lmin → Ct↓
+
+        This creates the structural Ct difference that drives differential SIT:
+            irrev:   Ct_irrev  > theta → z pushed toward SAFE → larger d_base → SIT
+            ablated: Ct_ablated < theta → z stays near baseline → SIT suppressed
+        """
+        H = int(math.floor(FORECAST_H_MAX * (1.0 - self.capacity)))
+        return max(FORECAST_H_MIN, H)
 
     def _compute_crisis_score_raw(self, state_values: Dict[State, int]) -> float:
         """
@@ -629,7 +648,7 @@ class CATLMAgent:
 
         For instant readout (dialogue, UI display), use crisis_score_instant().
         """
-        projected = self._project_idle_drift(FORECAST_HORIZON)
+        projected = self._project_idle_drift(self.forecast_horizon())
         return self._compute_crisis_score_raw(projected)
 
     def crisis_score_instant(self) -> float:

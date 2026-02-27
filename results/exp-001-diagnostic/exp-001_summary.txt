@@ -1,0 +1,16 @@
+CATLM EXP-001: Seed-Sweep Experiment Summary
+=============================================
+Profile:  activity=3, sociability=5, appetite=3, cowardice=5  (θ ≈ 0.410)
+Scenario: 40 ticks IDLE → 80 ticks auto-policy
+n_seeds:  200
+n_ticks:  120
+SIT eps:  0.25  (require_collapse_regime=False)
+n_boot:   2000
+
+Δ = Irreversible − Ablated  (paired design, 95% percentile bootstrap CI)
+
+  Δsit_count        mean=+0.0000  CI=[+0.0000, +0.0000]
+  Δmean_Ct          mean=-0.0602  CI=[-0.0606, -0.0597]  *** CI EXCLUDES 0
+  Δnormal_ticks     mean=+3.5300  CI=[+3.4450, +3.6150]  *** CI EXCLUDES 0
+  Δalpha_final      mean=-0.0055  CI=[-0.0064, -0.0045]  *** CI EXCLUDES 0
+  Δalpha_slope      mean=-0.0055  CI=[-0.0064, -0.0045]  *** CI EXCLUDES 0

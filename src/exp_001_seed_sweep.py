@@ -305,6 +305,7 @@ def save_summary_txt(
     sociability: int,
     neglect: int,
     n_boot: int,
+    require_collapse_regime: bool = True,
 ) -> None:
     summary = result["summary"]
     theta_approx = 0.5 - (TRAIT_MULTIPLIER[cowardice] - 1.0) * 0.15
@@ -317,7 +318,7 @@ def save_summary_txt(
             f"Scenario: {neglect} ticks IDLE → {n_ticks - neglect} ticks auto-policy\n"
             f"n_seeds:  {n_seeds}\n"
             f"n_ticks:  {n_ticks}\n"
-            f"SIT eps:  {eps}  (require_collapse_regime=True)\n"
+            f"SIT eps:  {eps}  (require_collapse_regime={require_collapse_regime})\n"
             f"n_boot:   {n_boot}\n\n"
             f"Δ = Irreversible − Ablated  (paired design, 95% percentile bootstrap CI)\n\n"
         )
@@ -361,6 +362,9 @@ def main() -> None:
                         help=f"Output directory (default: {OUT_DIR})")
     parser.add_argument("--no-pdf", action="store_true",
                         help="Skip PDF output (PNG only)")
+    parser.add_argument("--sit-anytime", action="store_true",
+                        help="Count SIT events outside collapse regime (diagnostic: "
+                             "checks whether collapse-filter is the reason SIT=0).")
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
@@ -369,7 +373,8 @@ def main() -> None:
         lam=0.25,
         eps=args.eps,
         k_persist=3,
-        require_collapse_regime=True,
+        k_stable=15,
+        require_collapse_regime=(not args.sit_anytime),
         insight_phi=0.7,
         insight_k_persist=3,
     )
@@ -397,6 +402,8 @@ def main() -> None:
     print(f"  Profile: sociability={args.sociability}, cowardice={args.cowardice}  "
           f"(θ ≈ {theta_approx:.3f})")
     print(f"  Scenario: {neglect_n} ticks IDLE → {args.ticks - neglect_n} ticks auto-policy")
+    if args.sit_anytime:
+        print("  [DIAGNOSTIC] --sit-anytime: require_collapse_regime=False")
     print(f"  Output: {args.output}")
     print()
 
@@ -428,6 +435,7 @@ def main() -> None:
         sociability=args.sociability,
         neglect=neglect_n,
         n_boot=args.n_boot,
+        require_collapse_regime=(not args.sit_anytime),
     )
 
     # ── Render figure ─────────────────────────────────────────────────────────

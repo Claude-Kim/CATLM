@@ -406,6 +406,14 @@ def figure_trait_sensitivity(
         ax.set_title(title)
         ax.set_xticks(levels)
         ax.grid(axis="y", alpha=0.3)
+        # Fix near-empty appearance by setting data-driven y-limits
+        all_vals = [v for lv in levels for v in results[lv][key]]
+        if key == "sit":
+            ax.set_ylim(-0.5, max(all_vals) + 0.5)
+        else:
+            lo, hi = min(all_vals), max(all_vals)
+            margin = (hi - lo) * 0.10 if hi > lo else 0.05
+            ax.set_ylim(lo - margin, hi + margin)
 
     fig, axes = plt.subplots(2, 2, figsize=(11, 8))
     fig.suptitle(

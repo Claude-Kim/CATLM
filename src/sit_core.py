@@ -38,7 +38,10 @@ class SITConfig:
 
     # SIT detection
     eps: float = 0.25           # tuned for z in R^3 (safe/greedy/repair)
-    k_persist: int = 3
+    k_persist: int = 3          # consecutive ticks z must stay displaced → SIT fires
+    k_stable: int = 15          # consecutive ticks z must stay stable → baseline updates
+                                # Must be > k_persist; with EMA λ=0.25, k_stable<5 lets
+                                # baseline caterpillar-crawl with z and block SIT detection.
     require_collapse_regime: bool = True
 
     # Insight definition
@@ -104,6 +107,7 @@ class SITCore:
         # SIT baseline (attractor reference) and displacement streak
         self._baseline: Tuple[float, float, float] = self.z
         self._disp_streak: int = 0
+        self._stable_streak: int = 0
 
         # Insight persistence
         self._insight_streak: int = 0
@@ -113,6 +117,7 @@ class SITCore:
         self.z = (1 / 3, 1 / 3, 1 / 3)
         self._baseline = self.z
         self._disp_streak = 0
+        self._stable_streak = 0
         self._insight_streak = 0
         self._insight_attained = False
 
@@ -189,9 +194,18 @@ class SITCore:
 
         if d_base > cfg.eps:
             self._disp_streak += 1
+            self._stable_streak = 0
         else:
+            # Don't immediately follow z — wait for k_stable stable ticks
+            # before accepting the new position as baseline.
+            # k_stable >> k_persist so that gradual drift (irreversible
+            # condition) can accumulate enough displacement before the
+            # baseline catches up.
             self._disp_streak = 0
-            self._baseline = self.z
+            self._stable_streak += 1
+            if self._stable_streak >= cfg.k_stable:
+                self._baseline = self.z
+                self._stable_streak = 0
 
         sit_ok = self._disp_streak >= cfg.k_persist
         if cfg.require_collapse_regime:
@@ -207,9 +221,10 @@ class SITCore:
             f"baseline={tuple(round(v,3) for v in self._baseline)}, z={tuple(round(v,3) for v in self.z)}"
         )
 
-        # Accept new attractor
+        # Accept new attractor; reset both streaks
         self._baseline = self.z
         self._disp_streak = 0
+        self._stable_streak = 0
         return (True, reason, d_base)
 
     def _update_insight(self) -> Tuple[bool, bool, int]:
@@ -263,6 +278,7 @@ class SITCore:
             "z": list(self.z),
             "baseline": list(self._baseline),
             "disp_streak": self._disp_streak,
+            "stable_streak": self._stable_streak,
             "insight_streak": self._insight_streak,
             "insight_attained": self._insight_attained,
         }
@@ -271,5 +287,6 @@ class SITCore:
         self.z = tuple(float(v) for v in snap["z"])
         self._baseline = tuple(float(v) for v in snap["baseline"])
         self._disp_streak = int(snap["disp_streak"])
+        self._stable_streak = int(snap.get("stable_streak", 0))
         self._insight_streak = int(snap["insight_streak"])
         self._insight_attained = bool(snap["insight_attained"])
