@@ -1,12 +1,12 @@
 # CATLM Concept Definition
 
 > **Cat Adaptive Tiny Language Model**
-> SNAX Cats On-Device AI Character Adaptation System
+> Cats On-Device AI Character Adaptation System
 > v2.0 | 2026
 
 ---
 
-## 0. SNAX Cats Matrix Summary
+## 0. Cats Matrix Summary
 
 | Item | Value | Meaning |
 |------|----|------|
@@ -19,7 +19,7 @@
 
 ## 1. Definition
 
-**CATLM** is an on-device lightweight AI-based character adaptation system for the mobile game SNAX Cats.
+**CATLM** is an on-device lightweight AI-based character adaptation system for the mobile game Cats.
 
 It analyzes the player's gameplay patterns in real time to dynamically generate each cat's state and dialogue. Designed as an optional enhancement layer independent of the core game loop, the game functions normally even when CATLM is disabled.
 
@@ -327,7 +327,7 @@ After each SIT, `z_baseline` resets to `z_t` (new attractor accepted). Each even
 
 ---
 
-*CATLM Concept Definition Document v2.0 — SNAX Cats*
+*CATLM Concept Definition Document v2.0*
 
 (Related documents)
 - [Structural Inference Transitions Under Irreversible Survival Constraints](https://zenodo.org/records/18780274)
