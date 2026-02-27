@@ -2,7 +2,7 @@
   "experiment": "EXP-003_NULL_FPR",
   "strict": {
     "config_label": "strict",
-    "n_seeds": 200,
+    "n_seeds": 100,
     "n_ticks": 120,
     "neglect_ticks": 40,
     "sit_cfg": {
@@ -26,8 +26,8 @@
         "median": 0.0,
         "std": 0.0,
         "delta_mean": 0.0,
-        "p_null_gt_real": 1.0,
-        "p_real_gt_null": 1.0,
+        "p_null_gt_real": null,
+        "p_real_gt_null": null,
         "pass_fpr005": true,
         "pass_stability": false
       },
@@ -39,8 +39,8 @@
         "median": 0.0,
         "std": 0.0,
         "delta_mean": 0.0,
-        "p_null_gt_real": 1.0,
-        "p_real_gt_null": 1.0,
+        "p_null_gt_real": null,
+        "p_real_gt_null": null,
         "pass_fpr005": true,
         "pass_stability": false
       },
@@ -52,8 +52,8 @@
         "median": 0.0,
         "std": 0.0,
         "delta_mean": 0.0,
-        "p_null_gt_real": 1.0,
-        "p_real_gt_null": 1.0,
+        "p_null_gt_real": null,
+        "p_real_gt_null": null,
         "pass_fpr005": true,
         "pass_stability": false
       }
@@ -61,7 +61,7 @@
   },
   "exploratory": {
     "config_label": "exploratory",
-    "n_seeds": 200,
+    "n_seeds": 100,
     "n_ticks": 120,
     "neglect_ticks": 40,
     "sit_cfg": {
@@ -71,9 +71,9 @@
       "require_collapse_regime": false
     },
     "real": {
-      "mean": 4.935,
+      "mean": 4.93,
       "median": 5.0,
-      "std": 0.246525860712421,
+      "std": 0.25514701644346144,
       "p_gt0": 1.0
     },
     "null_conditions": {
@@ -81,12 +81,12 @@
         "null_type": "ct_perm",
         "csv_col": "sit_null_ctperm",
         "fpr": 1.0,
-        "mean": 28.395,
+        "mean": 28.43,
         "median": 28.0,
-        "std": 3.2340338588209,
-        "delta_mean": -23.46,
-        "p_null_gt_real": 7.426278314575566e-75,
-        "p_real_gt_null": 1.0,
+        "std": 3.0862760731988965,
+        "delta_mean": -23.5,
+        "p_null_gt_real": null,
+        "p_real_gt_null": null,
         "pass_fpr005": false,
         "pass_stability": true
       },
@@ -94,12 +94,12 @@
         "null_type": "obs_perm",
         "csv_col": "sit_null_obsperm",
         "fpr": 1.0,
-        "mean": 35.85,
+        "mean": 35.67,
         "median": 36.0,
-        "std": 2.8613807855648994,
-        "delta_mean": -30.915000000000003,
-        "p_null_gt_real": 6.950912084449233e-75,
-        "p_real_gt_null": 1.0,
+        "std": 2.8497543753804466,
+        "delta_mean": -30.740000000000002,
+        "p_null_gt_real": null,
+        "p_real_gt_null": null,
         "pass_fpr005": false,
         "pass_stability": true
       },
@@ -107,12 +107,12 @@
         "null_type": "zpref_random",
         "csv_col": "sit_null_random",
         "fpr": 1.0,
-        "mean": 48.35,
-        "median": 48.5,
-        "std": 2.4934915279583367,
-        "delta_mean": -43.415,
-        "p_null_gt_real": 6.179683473738293e-75,
-        "p_real_gt_null": 1.0,
+        "mean": 48.37,
+        "median": 48.0,
+        "std": 2.5481561961543875,
+        "delta_mean": -43.44,
+        "p_null_gt_real": null,
+        "p_real_gt_null": null,
         "pass_fpr005": false,
         "pass_stability": true
       }
