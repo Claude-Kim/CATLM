@@ -359,6 +359,7 @@ def figure_capacity_ablation(
 def figure_trait_sensitivity(
     n_ticks: int = 120,
     n_seeds: int = 10,
+    sit_config: Optional[SITConfig] = None,
 ) -> plt.Figure:
     """
     2 × 2 box-plot grid:
@@ -366,6 +367,12 @@ def figure_trait_sensitivity(
       [1,*] Vary sociability (1–5), fixed cowardice=3
     Columns: mean Ct | total SIT count
     """
+    # Use a neglect scenario: first 1/3 IDLE to drive stress, then auto-care.
+    # This makes trait effects visible on both Ct and SIT counts.
+    neglect = n_ticks // 3
+    _user_actions: List[Optional[Action]] = (
+        [Action.IDLE] * neglect + [None] * (n_ticks - neglect)
+    )
 
     def _collect(vary: str, levels: List[int]) -> Dict[int, Dict[str, List[float]]]:
         results: Dict[int, Dict[str, List[float]]] = {}
@@ -379,7 +386,9 @@ def figure_trait_sensitivity(
                 else:
                     profile = CatProfile(name="Cat", activity=3, sociability=level,
                                          appetite=3, cowardice=3)
-                logs = run_simulation(profile, n_ticks=n_ticks, seed=seed)
+                logs = run_simulation(profile, n_ticks=n_ticks, seed=seed,
+                                      user_actions=_user_actions,
+                                      sit_config=sit_config)
                 ct_means.append(float(np.mean([r["Ct"] for r in logs])))
                 sit_counts.append(float(logs[-1]["sit_count"]))
             results[level] = {"ct": ct_means, "sit": sit_counts}
@@ -682,6 +691,7 @@ def main() -> None:
         figure_trait_sensitivity(
             n_ticks=args.ticks,
             n_seeds=args.seeds_sensitivity,
+            sit_config=paper_sit_cfg,
         ),
         "fig4_trait_sensitivity",
     )
